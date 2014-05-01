@@ -1,0 +1,3147 @@
+#!/m1/shared/bin/perl
+
+use strict;
+use warnings;
+
+use vars qw($VERSION);
+
+$VERSION = q(0.3.029);
+
+use IO::Compress::Gzip qw(gzip $GzipError) ;
+use Digest::SHA1  qw(sha1_hex);
+use Cwd qw(getcwd);
+use File::Copy qw(copy move);
+use File::Basename;
+use File::Spec;
+use Time::HiRes qw(sleep time);
+use POSIX qw(strftime);
+use MIME::Base64;
+use YAML;
+use Getopt::Long
+    qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
+
+# Record status and load result
+use constant ADD     => 'add';
+use constant DELETE  => 'delete';
+use constant HALFDEL => 'halfdelete';
+use constant REPLACE => 'replace';
+use constant DISCARD => 'discard';
+use constant UNRESOLVED => 'unresolved';
+use constant UNMATCHED  => 'unmatched';
+use constant MATCH   => 'match';
+
+# Record type
+use constant AUTHORITY => 'auth';
+use constant BIB => 'bib';
+use constant MFHD => 'mfhd';
+use constant BIBMFHD => 'bib+mfhd';
+
+my %abbrev2rectype = (A => AUTHORITY, B => BIB, M => MFHD);
+
+# Record encodings
+use constant MARC8 => 'marc8';
+use constant UTF8 => 'utf8';
+
+# Other
+use constant NONE => 'none';
+use constant MIXED => 'mixed';
+use constant UNRECOGNIZED => 'unrecognized';
+
+# Command result
+use constant OK => 'OK';
+use constant ERR => 'ERR';
+
+# Callback return value
+use constant STOP => 'stop';
+use constant NEXT => 'next';
+
+# Project/update/batch/job status
+use constant NEW       => '@new';        # P U - -
+use constant ERROR     => '@error';      # - - B J
+use constant CLOSED    => '@closed';     # P - - -
+use constant REVIEW    => '@review';     # - U B J
+use constant WAITING   => '@waiting';    # P U - -
+use constant PREPARING => '@preparing';  # - - B -
+use constant PREPARED  => '@prepared';   # - - B -
+use constant LOADING   => '@loading';    # - - - J
+use constant LOADED    => '@loaded';     # - - J J
+use constant FINISHED  => '@finished';   # - U B -
+use constant RECEIVED  => '@received';   # P U - -
+use constant INPROCESS => '@inprocess';  # P U - -
+use constant IDLE      => '@idle';       # P - - -
+use constant ONHOLD    => '@onhold';     # P U - -
+use constant UNKNOWN   => '@unknown';    # P U B J
+
+my @statuses = (
+    # Code       Chkbox   Abbrev Open?
+    [ NEW,       '[ ]',  'new',  1    ],
+    [ ERROR,     '[!]',  'err',  1    ],
+    [ CLOSED,    '[C]',  'cld',  0    ],
+    [ REVIEW,    '[r]',  'rvw',  1    ],
+    [ WAITING,   '[w]',  'wtg',  1    ],
+    [ PREPARING, '[p]',  'ppg',  1    ],
+    [ PREPARED,  '[P]',  'ppd',  1    ],
+    [ LOADING,   '[l]',  'ldg',  1    ],
+    [ LOADED,    '[L]',  'ldd',  1    ],
+    [ FINISHED,  '[x]',  'fin',  1    ],
+    [ RECEIVED,  '[R]',  'rcd',  1    ],
+    [ INPROCESS, '[~]',  'pro',  1    ],
+    [ IDLE,      '[-]',  'idl',  0    ],
+    [ ONHOLD,    '[#]',  'onh',  1    ],
+    [ UNKNOWN,   '[?]',  'unk',  1    ],
+);
+
+use constant ONETIME => 'onetime';
+use constant ONGOING => 'ongoing';
+
+use constant TIMESTAMP => '%Y%m%dT%H%M%S';
+
+my %status2chkbox = map { @$_[0,1] } @statuses;
+my %status2abbrev = map { @$_[0,2] } @statuses;
+
+my %record_status = (
+    ''  => NONE,
+    'n' => ADD,
+    'd' => DELETE,
+);
+
+my %record_type = (
+    ''   => NONE,
+    'a'  => AUTHORITY,
+    'b'  => BIB,
+    'bh' => BIBMFHD,
+    'h'  => MFHD,
+);
+
+my %record_encoding = (
+    ''  => NONE,
+    'm' => MARC8,
+    'u' => UTF8,
+);
+
+sub projwalk(&@);
+sub usage;
+sub usage_commands;
+sub warning;
+sub quit;
+sub fatal;
+sub throw;
+sub ask(\$$;$);
+sub askbool($);
+
+my $root = $ENV{'VBLR_ROOT'} || "$ENV{HOME}/proj";
+my $pdir;  # Path to the current project (e.g., ~/proj/ecl/afso)
+my $pcur;  # Name of the current project (e.g., ecl/afso)
+my $ucur;  # Name of the current update (if we're within an update dir)
+my $bcur;  # Name of the current batch (if yadda yadda)
+
+my $project;
+
+@ARGV = qw(help) if !@ARGV;
+
+my $now = strftime(TIMESTAMP, localtime);
+
+GetOptions(
+    'r|root=s' => \$root,
+    'p|project=s' => \$pdir,
+) or usage_commands;
+
+my %skip_orient = map { $_ => 1 } qw( init help projects groups www );
+
+my $cmd = shift @ARGV;
+my $sub = __PACKAGE__->can("cmd_$cmd") || usage_commands;
+orient() if !$skip_orient{$cmd};
+$sub->();
+
+# --- Command handlers
+
+sub cmd_init {
+    #@ init [-r SET] [-p PROTO] [-m DESC] [DIR] :: Begin a vblr project
+    my ($recset, $descrip);
+    my $freq = ONGOING;
+    my $proto = 'default';
+    GetOptions(
+        '1|one-time'      => sub { $freq = ONETIME },
+        'r|record-set=s'  => \$recset,
+        'p|prototype=s'   => \$proto,
+        'm|description=s' => \$descrip,
+    ) or usage;
+    my $dir;
+    if (@ARGV == 0) {
+        $dir = '.';
+    }
+    elsif (@ARGV == 1) {
+        # vblr init DIR
+        ($dir) = @ARGV;
+        fatal "Not a directory: $dir"
+            if -e $dir && ! -d _;
+        chdir $root;
+    }
+    else {
+        usage;
+    }
+    makedir($dir);
+    chdir $dir;
+    $pdir = getcwd;
+    my $pcode;
+    if ($pdir =~ m{^$root/groups/([^/]+)/projects/([^/]+)$}) {
+        $pcode = "$1/$2";
+    }
+    elsif ($pdir =~ m{^$root/(.+)$}) {
+        $pcode = $1;
+    }
+    else {
+        fatal "Project must live within the root ($root)";
+    }
+    fatal "Project has been initialized already" if -e 'vblr.kv';
+    my $proto_dir = $proto =~ m{^/} ? $proto : "$root/prototypes/$proto";
+    fatal "No such prototype: $proto" if ! -e $proto_dir;
+    fatal "Not a prototype: $proto" if ! -e "$proto_dir/prototype.kv";
+    ask $descrip, 'Project description: ' if !defined $descrip;
+    ask $freq,    'Project frequency: ';
+    my $id = mkid('p');
+    symlink "$root/$pcode", "$root/id/$id";
+    $project = {
+        'code' => $pcode,
+        'created' => $now,
+        'count' => 0,
+        'record-set' => $recset,
+        'description' => $descrip,
+        'prototype' => $proto,
+        'id' => $id,
+        'frequency' => $freq,
+    };
+    # Copy files from prototype
+    copy_bin($proto_dir,  '.');
+    copy_conf($proto_dir, '.');
+    print STDERR "Configuring...\n";
+    configure();
+    if (-e "$dir/project.kv") {
+        warning "Pre-existing project metadata has been preserved";
+        %$project = ( %{ rdproject() }, %$project );
+    }
+    wrkvfile('vblr.kv', vblr(TIMESTAMP));
+    wrproject($project);
+    makedir('updates');
+    wrstatus('.', NEW);
+    aplast('init');
+    aplog('init', result => OK);
+}
+
+### sub cmd_now {
+###     @ARGV == 1 or usage;
+###     my ($status) = @ARGV;
+###     $status =~ s/^\@?/\@/;
+###     usage if !grep { $_->[0] eq $status } @statuses;
+###     wrstatus('.', $status);
+### }
+
+sub cmd_base {
+    #@ base [-C] [-m DESCRIP] FILE :: Add the base MARC file for the project
+    my ($descrip, $empty, $copy, $historical);
+    my $type = ADD;
+    GetOptions(
+        'x|delete' => sub { $type = DELETE },
+        'C|copy' => \$copy,
+        'E|empty' => sub { $empty = $copy = 1 },
+        'm|description=s' => \$descrip,
+        'i|historical' => \$historical,
+    ) or usage;
+    ask $descrip, 'Description: ', 'base file' if !defined $descrip;
+    @ARGV = qw(/dev/null) if $empty;
+    usage if @ARGV != 1;
+    add(
+        'type' => $type,
+        'update' => 'BASE',
+        'file' => $ARGV[0],
+        'description' => $descrip,
+        'copy' => $copy,
+        'historical' => $historical,
+    );
+}
+
+sub cmd_add {
+    #@ add [-CRix] [-p PROTO] [-m DESCRIP] FILE [NAME] :: Add a MARC file to the project
+    my ($descrip, $proto, $copy, $historical, $redo);
+    my $type = ADD;
+    GetOptions(
+        'x|delete' => sub { $type = DELETE },
+        'C|copy' => \$copy,
+        'm|description=s' => \$descrip,
+        'p|prototype=s' => \$proto,
+        'i|historical' => \$historical,
+        'R|redo' => \$redo,
+    ) or usage;
+    usage if @ARGV > 2 || @ARGV < 1;
+    my ($file, $u) = @ARGV;
+    ask $u,       'Update code: ', strftime("%Y-%m", localtime) if !defined $u;
+    ask $descrip, 'Description: ' if !defined $descrip;
+    add(
+        'type' => $type,
+        'update' => $u,
+        'file' => $file,
+        'description' => $descrip,
+        'copy' => $copy,
+        'prototype' => $proto,
+        'historical' => $historical,
+        'redo' => $redo,
+    );
+}
+
+sub cmd_note {
+    #@ note [ -j JOB | [UPDATE [BATCH]] ] -- TEXT... :: Add a note to a batch, update, or project
+    my $i = 0;
+    foreach (@ARGV) {
+        last if $_ eq '--';
+        $i++;
+    }
+    usage if $i >= $#ARGV;
+    my @note = splice @ARGV, $i;
+    shift @note;
+    my $note = join(' ', @note);
+    my ($u, $b, $j);
+    GetOptions(
+        'j|job=s' => \$j,
+    ) or usage;
+    ($u, $b) = @ARGV;
+    ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
+    my $file;
+    if (defined $j) {
+        $file = "updates/$u/batches/$b/jobs/$j/job.kv";
+    }
+    elsif (defined $b) {
+        $file = "updates/$u/batches/$b/batch.kv";
+    }
+    elsif (defined $u) {
+        $file = "updates/$u/update.kv";
+    }
+    else {
+        $file = 'project.kv';
+    }
+    my $kv = rdkvfile($file);
+    my $notes = $kv->{'notes'};
+    my @notes = grep { defined } ($notes, $note);
+    $kv->{'notes'} = join(' \; ', @notes);
+    wrkvfile($file, $kv);
+}
+
+sub cmd_conf {
+    #@ conf :: Show configuration settings
+    my $verbose;
+    my $confdir = 'conf';
+    GetOptions(
+        'd|conf-dir=s' => \$confdir,
+        'v|verbose' => \$verbose,
+    ) or usage;
+    @ARGV = map { my $f = basename($_); $f =~ s/\.kv$//; $f } files("$confdir/*.kv") if !@ARGV;
+    foreach my $what (@ARGV) {
+        if ($what =~ /^([^.]+)\.([-a-z0-9]+)$/) {
+            my ($f, $k) = ($1, $2);
+            my $kv = rdkvfile("$confdir/$f.kv");
+            my $v = $kv->{$k};
+            fatal "Undefined: $what" if !defined $v;
+            if ($verbose) {
+                print "$what $v\n";
+            }
+            else {
+                print $v, "\n";
+            }
+        }
+        else {
+            my $kv = rdkvfile("$confdir/$what.kv");
+            foreach my $k (sort keys %$kv) {
+                print "$what.$k $kv->{$k}\n";
+            }
+        }
+        #else {
+        #    copy("$confdir/$what.kv", \*STDOUT);
+        #}
+    }
+}
+
+sub cmp_updates {
+    return -1 if $a eq 'BASE';
+    return +1 if $b eq 'BASE';
+    $a cmp $b;
+}
+
+sub cmd_count {
+    #@ count [UPDATE [RANGE]] :: Count MARC records
+    my ($all, $verbose);
+    my %status = map { $_->[0] => 1 }  @statuses;
+    GetOptions(
+        'a|all' => \$all,
+        'v|verbose' => \$verbose,
+        's|status=s' => sub {
+            $status{$_->[0]} = 0 for @statuses;
+            foreach (split /,/, $_[1]) {
+                s/^\@?/@/;
+                $status{$_} = 1;
+            }
+        },
+        'l|loaded' => sub {
+            $status{$_->[0]} = 0 for @statuses;
+            $status{LOADED()} = $status{FINISHED()} = 1;
+        },
+        'L|not-loaded' => sub {
+            $status{$_->[0]} = 1 for @statuses;
+            $status{LOADED()} = $status{FINISHED()} = 0;
+        },
+    ) or usage;
+    if ($all) {
+        usage if @ARGV;
+        my $total = 0;
+        foreach my $u (updates()) {
+            my $s = rdstatus("updates/$u");
+            next if %status && !$status{$s};
+            my $n = count_update($u);
+            if ($verbose) {
+                printf "%6d %s %s\n", $n, $status2chkbox{$s} || '[?]', $u;
+            }
+            else {
+                printf "%6d %s\n", $n, $u;
+            }
+            $total += $n;
+        }
+        printf "%6d ... total\n", $total if $verbose;
+        return;
+    }
+    usage if @ARGV > 2;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    if (keys %status) {
+        my $count = count_records_with_status($u, $b, %status);
+        print $verbose ? "$count $u $b\n" : "$count\n";
+    }
+    elsif (!defined $u) {
+        print $project->{'count'};
+        print " records in project $pcur" if $verbose;
+        print "\n";
+    }
+    else {
+        if (defined $b) {
+            my ($s, $e);
+            ($s, $e, $b) = batch_range($b, $u);
+            print $e - $s + 1;
+            print " records in update $u batch $b" if $verbose;
+            print "\n";
+        }
+        else {
+            my $update = rdupdate($u);
+            print $update->{'count'};
+            print " records in update $u" if $verbose;
+            print "\n";
+        }
+    }
+}
+
+sub cmd_export {
+    #@ export [-y] [-a] :: Export data on a project
+    my ($all, $exporter);
+    GetOptions(
+        'a|all-updates' => \$all,
+        'Y|yaml' => sub { $exporter = \&export_as_yaml },
+    ) or usage;
+    usage if !defined $exporter;
+    my $unloaded = 0;
+    my @all_jobs;
+    my @u;
+    $project->{'status'} = rdstatus('.');
+    my %u2status;
+    if ($all) {
+        @u = updates();
+        %u2status = map { $_ => rdstatus("updates/$_") } @u;
+    }
+    elsif (@ARGV) {
+        @u = @ARGV;
+    }
+    elsif (defined $ucur) {
+        @u = ($ucur);
+    }
+    else {
+        @u = updates();
+        %u2status = map { $_ => rdstatus("updates/$_") } @u;
+        @u = grep { $u2status{$_} ne FINISHED } @u;
+    }
+    %u2status = map { $_ => rdstatus("updates/$_") } @u
+        if !%u2status;
+    if (!exists $project->{'code'} && $pdir =~ m{^$root/(.+)$}) {
+        $project->{'code'} = $1;
+        wrproject($project);
+    }
+    $project->{'status'} = rdstatus('.');
+    $project->{'updates'} = [ map {
+        my $u = $_;
+        my $update = rdupdate($u);
+        $update->{'status'} = $u2status{$u};
+        $update->{'code'} = $u;
+        $update->{'file'} = basename($update->{'source'});
+        $update->{'date'} = $update->{'created'} if !defined $update->{'date'};
+        my @b = batches($u);
+        my %b2status = map { $_ => rdstatus("updates/$u/batches/$_") } @b;
+        @b = grep { $b2status{$_} ne FINISHED } @b
+            if !$all;
+        my $ucount = 0;
+        $update->{'batches'} = [ map {
+            my $b = $_;
+            my $batch = rdbatch($u, $b);
+            my @j = jobs($u, $b);
+            my $bstat = $batch->{'status'} = $b2status{$b};
+            my $n = $batch->{'count'} ||= $batch->{'end'} - $batch->{'begin'} + 1;
+            $ucount += $n if $bstat ne FINISHED && $bstat ne LOADED;
+            $batch->{'jobs'} = [ map {
+                my $j = $_;
+                my $jstat = rdstatus("updates/$u/batches/$b/jobs/$j");
+                my $job = job($u, $b, $j);
+                my $count   = $job->{'count'}   ||= $batch->{'count'};
+                my $add     = $job->{'add'}     ||= 0;
+                my $match   = $job->{'match'}   ||= 0;
+                my $replace = $job->{'replace'} ||= 0;
+                my $delete  = $job->{'delete'}  ||= 0;
+                my $discard = $job->{'discard'} ||= $count - $add - $match - $replace - $delete;
+                $job->{'status'} = $jstat;
+                $job->{'update'}  ||= $u;
+                push @all_jobs, $job;
+                $job;
+            } @j ];
+            $batch;
+        } @b ];
+        if ($ucount == 0) {
+            $ucount = $update->{'count'};
+        }
+        $unloaded += $ucount;
+        $update;
+    } @u ];
+    $project->{'jobs'} = \@all_jobs;
+    $project->{'unloaded'} = $unloaded;
+    $exporter->($project);
+}
+
+sub cmd_id {
+    print join(' ', @$project{qw(id code description)}), "\n";
+}
+
+sub cmd_status {
+    #@ status [-v] [UPDATE [BATCH]]... :: Show project status
+    my ($long, $verbose, $all);
+    GetOptions(
+        'l|long' => \$long,
+        'v|verbose' => \$verbose,
+        'a|all' => \$all,
+    ) or usage;
+    usage if @ARGV > 2;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    if ($all) {
+        undef $u;
+        undef $b;
+    }
+    my $pstat = rdstatus('.');
+    my $sym = $long ? $status2abbrev{$pstat} : $status2chkbox{$pstat};
+    printf "%s %s\n", $sym, $pcur;
+    my @u = defined $u ? ($u) : updates();
+    foreach $u (@u) {
+        my $ustat = rdstatus("updates/$u");
+        $sym = $long ? $status2abbrev{$ustat} : $status2chkbox{$ustat};
+        printf "    %s %s\n", $sym, $u;
+        next if $ustat eq FINISHED && !defined $b;
+        my @b = defined $b ? ($b) : batches($u);
+        foreach $b (@b) {
+            my $bstat = rdstatus("updates/$u/batches/$b");
+            $sym = $long ? $status2abbrev{$bstat} : $status2chkbox{$bstat};
+            printf "        %s %s\n", $sym, $b;
+            my @j = jobs($u, $b);
+            foreach my $j (@j) {
+                my $jstat = rdstatus("updates/$u/batches/$b/jobs/$j");
+                $sym = $long ? $status2abbrev{$jstat} : $status2chkbox{$jstat};
+                printf "            %s %s\n", $sym, $j;
+            }
+        }
+    }
+}
+
+sub cmd_fin { goto &cmd_finish }
+
+sub cmd_idle {
+    my $comment;
+    GetOptions( 'm|comment=s' => \$comment ) or usage;
+    wrstatus('.', IDLE);
+    aplog('idle', defined $comment ? ('comment' => $comment) : ());
+    aplast('idle');
+    run_hook('idle');
+}
+
+sub cmd_close {
+    my $comment;
+    GetOptions( 'm|comment=s' => \$comment ) or usage;
+    wrstatus('.', CLOSED);
+    aplog('close', defined $comment ? ('comment' => $comment) : ());
+    aplast('close');
+    run_hook('close');
+}
+
+sub cmd_finish {
+    #@ finish [UPDATE [BATCH]]
+    my ($verbose);
+    GetOptions(
+        'v|verbose' => \$verbose,
+    ) or usage;
+    usage if @ARGV > 2;
+    my %log;
+    if (@ARGV == 0) {
+        wrstatus('.', FINISHED);
+    }
+    else {
+        my ($u, $b) = resolve_update_and_batch(@ARGV);
+        if (defined $u) {
+            $log{'update'} = $u;
+            if (defined $b) {
+                wrstatus("updates/$u/batches/$b", FINISHED);
+                $log{'batch'} = $b;
+            }
+            else {
+                # XXX Update completed -- send notification
+                wrstatus("updates/$u", FINISHED);
+            }
+        }
+        else {
+            fatal "I can't tell which update or batch you are finishing";
+        }
+    }
+    aplog('finish', %log);
+    aplast('finish', %log);
+    run_hook('finish');
+}
+
+sub cmd_groups {
+    #@ groups :: List groups (libraries)
+    usage if @ARGV;
+    fatal "Can't chdir $root: $!" if !chdir $root;
+    print basename($_), "\n" for dirs('groups/*');
+}
+
+sub cmd_projects {
+    #@ projects [STATUS] :: List projects (with specified status)
+    usage if @ARGV > 1;
+    my $verbose;
+    GetOptions( 'v|verbose'  => \$verbose ) or usage;
+    fatal "Can't chdir $root: $!" if !chdir $root;
+    my ($s) = @ARGV;
+    $s =~ s/^\@?/\@/ if defined $s;
+    my $filter = defined($s) ? sub { rdstatus($_) eq $s } : sub { 1 };
+    my @proj = map {
+        my $link = readlink($_);
+        $link =~ m{^$root/(.+)$} && -f "$link/project.kv" && $filter->() ? ($1) : ();
+    } files("$root/id/*");
+    foreach my $p (sort @proj) {
+        if ($verbose) {
+            my $pstat = rdstatus($p);
+            printf "%s %s\n", $pstat, $p;
+        }
+        else {
+            print $p, "\n";
+        }
+    }
+}
+
+sub cmd_updates {
+    #@ updates [UPDATE]... :: List updates
+    my @u = updates(@ARGV);
+    print $_, "\n" for @u;
+}
+
+sub cmd_batches {
+    #@ batches [-v] [UPDATE] :: List batches in (an) update(s)
+    my $verbose;
+    GetOptions(
+        'v|verbose' => \$verbose,
+    ) or usage;
+    usage if @ARGV > 1;
+    my $u;
+    if (@ARGV) {
+        $u = shift @ARGV;
+    }
+    else {
+        usage if !defined $ucur;
+        $u = $ucur;
+    }
+    print $_, "\n" for batches($u);
+}
+
+sub cmd_rm {
+    #@ rm [-f] UPDATE BATCH
+    my ($force, $u, $b, $j);
+    GetOptions(
+        'f|force' => \$force,
+        'j|job=s' => \$j,
+    ) or usage;
+    ($u, $b) = @ARGV;
+    ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
+    if (defined $j) {
+        my $dir = "updates/$u/batches/$b/jobs";
+        my $status = rdstatus("$dir/$j");
+        fatal "Can't delete job $j: status"
+            if $status ne ERROR
+                && !$force;
+        $force or askbool "Delete job $j in batch $b of update $u? " or fatal 'Cancelled';
+        wrlist($dir, grep { $_ ne $j } rdlist($dir));
+        system('rm', '-Rf', "$dir/$j");
+        run_hook('removed', update => $u, batch => $b, job => $j);
+    }
+    elsif (defined $b) {
+        my $dir = "updates/$u/batches";
+        my $status = rdstatus("$dir/$b");
+        fatal "Can't delete batch $b: status"
+            if $status ne NEW
+            && $status ne PREPARED;
+        $force or askbool "Delete batch $b of update $u? " or fatal 'Cancelled';
+        wrlist($dir, grep { $_ ne $b } rdlist($dir));
+        system('rm', '-Rf', "$dir/$b");
+        run_hook('removed', update => $u, batch => $b);
+    }
+    elsif (defined $u) {
+        fatal "Sorry, I can't delete a whole update";
+    }
+    else {
+        fatal "Sorry, I can't delete a project";
+    }
+}
+
+sub cmd_div { goto &cmd_divide }
+
+sub cmd_divide {
+    #@ divide UPDATE [RANGE]... :: Divide an update into batches
+    my ($force, $verbose, $dry_run);
+    GetOptions(
+        'f|force'   => \$force,
+        'v|verbose' => \$verbose,
+        'n|dry-run' => \$dry_run,
+    ) or usage;
+    $verbose = 1 if $dry_run;
+    usage if !@ARGV;
+    my $u = shift @ARGV;
+    @ARGV = qw(1-10) if !@ARGV;
+    if ($u eq '.') {
+        fatal "Not in an update directory" if !defined $ucur;
+        $u = $ucur;
+    }
+    elsif (! -e "updates/$u") {
+        fatal "No such update: $u";
+    }
+    makedir("updates/$u/batches");
+    my @b = batches($u);
+    my $count = count_update($u);
+    my ($rs, $re) = (1, $count);  # Records remaining to be divided
+    if (@b) {
+        my ($s, $e, @etc) = consolidate_ranges(@b);
+        fatal "Can't divide if there are gaps" if $s != 1 || @etc;
+        fatal "Update $u is already fully divided" if $s == 1 && $e == $count;
+        $rs = $e + 1;
+    }
+    if (!@ARGV) {
+        push @b, "$rs-$re";
+    }
+    else {
+        do {
+            my $b = shift @ARGV;
+            if ($b =~ /^(\d+)-(\d+)$/) {
+                usage if $1 != $rs;
+                usage if $2 < $1;
+                usage if $2 > $count;
+                $rs = $2 + 1;
+                push @b, $b;
+            }
+            elsif ($b =~ /^(\d+)-n?$/) {
+                usage if $1 != $rs;
+                usage if @ARGV;
+                push @b, "$1-$count";
+                $rs = $count + 1;
+            }
+        } while @ARGV;
+        push @b, "$rs-$re" if $rs != $count + 1;
+    }
+    print "Dry run...\n" if $dry_run;
+    foreach my $b (@b) {
+        print STDERR "batch $b\n" if $verbose;
+        mkbatch($u, $b) if !$dry_run;
+    }
+    run_hook('divide', update => $u);
+}
+
+sub cmd_prep {
+    #@ prep [-v] [UPDATE [RANGE]] :: Prepare records for loading
+    my ($gen_html, $verbose, $dry_run);
+    GetOptions(
+        'v|verbose' => \$verbose,
+        'n|dry-run' => \$dry_run,
+        'h|html' => \$gen_html,
+    ) or usage;
+    $verbose = 1 if $dry_run;
+    usage if @ARGV > 2;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    if (!defined $b) {
+        fatal "You must specify an update" if !defined $u;
+        my @b = grep { my $s = rdstatus("updates/$u/batches/$_"); $s eq NEW || $s eq PREPARED } batches($u);
+        fatal "Update $u doesn't have any new (or previously prepared) batches" if !@b;
+        $b = $b[0];
+        warning "Assuming you want to prep the next new batch ($b) in update $u";
+    }
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    if ($verbose) {
+        print STDERR "Dry run...\n" if $dry_run;
+        print STDERR "update:  $u\nbatch:   $b\n";
+    }
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    fatal "No batch $b in update $u" if ! -e $bdir;
+    my $prep = find('bin/prep', $bdir, $udir, '.');
+    fatal "No record prep script" if !$prep || !-x $prep || -d $prep;
+    my ($cfile) = find('conf/prep.kv', $bdir, $udir, '.');
+    fatal "No record prep config" if !$cfile || -d $cfile;
+    my $in   = files("$udir/*.mrc");
+    my $out  = join('/', $bdir, PREPARING, 'records.mrc');
+    my $err  = join('/', $bdir, PREPARING, 'prep.err');
+    my $cmd  = "marcn -h $b < $in | $prep -c $cfile -u $u -b $b > $out 2> $err";
+    if ($dry_run) {
+        print STDERR "command: $cmd\n";
+        return;
+    }
+    wrstatus($bdir, PREPARING);
+    my $prepdir = join('/', $bdir, PREPARING);
+    makedir("$prepdir/bin", "$prepdir/conf");
+    copy($prep, "$prepdir/bin/prep.used");
+    copy($cfile, "$prepdir/conf/prep.kv.used");
+    my $status = system $cmd;
+    my $result = ERR;
+    if ($status == 0) {
+        my %marc = marc($out);
+        my $count = $marc{'count'};
+        my $expec = $e - $s + 1;
+        $expec *= 2 if $marc{'type'} eq BIBMFHD;
+        if ($count == $expec) {
+            $result = OK;
+            print STDERR "Record prep complete; no errors\n" if $verbose;
+        }
+        else {
+            $status = -1;
+            if ($count == 0) {
+                print STDERR "Record prep failed silently without producing any records\n";
+            }
+            else {
+                print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+            }
+        }
+    }
+    else {
+        print STDERR "Record prep failed; stderr follows\n";
+    }
+    if ($result eq ERR) {
+        unlink $out if ! -s $out;
+        copy($err, \*STDERR) if -s $err;
+        unlink $err if ! -s $err;
+        wrstatus($bdir, ERROR);
+        wrstatus($udir, ERROR);
+        #wrstatus('.',   ERROR);
+    }
+    else {
+        wrstatus($bdir, PREPARED);
+        wrstatus($udir, INPROCESS);
+        #wrstatus('.',   INPROCESS);
+    }
+    aplog('prep',
+        'count' => $e - $s + 1,
+        'result' => $result,
+        'update' => $u,
+        'batch' => $b,
+        'error' => $status,
+        'ready' => 0,
+    );
+    aplast('prep', update => $u, batch => $b);
+    apnext('check', update => $u, batch => $b);
+    if ($gen_html) {
+        local @ARGV = ('-z', $u, $b);
+        cmd_mkhtml();
+    }
+    run_hook('prep', update => $u, batch => $b);
+}
+
+sub cmd_configure {
+    #@ configure [prep|load] :: Configure a project interactively if it needs it
+    fatal "Configuring must be done interactively" if ! -t 0;
+    @ARGV = qw(prep load) if !@ARGV;
+    configure(@ARGV);
+}
+
+sub cmd_run {
+    #@ run [-vn] FILE UPDATE DESCRIP :: Add, divide, prep, load, finish
+    fatal "Not yet implemented";
+    my $type = ADD;
+    my ($verbose, $dry_run);
+    GetOptions(
+        'x|delete' => sub { $type = DELETE },
+        'v|verbose' => \$verbose,
+        'n|dry-run' => \$dry_run,
+    ) or usage;
+    usage if @ARGV != 3;
+    my ($f, $u, $descrip) = @_;
+    my $b = '1-n';
+    add(
+        'type' => $type,
+        'update' => $u,
+        'file' => $f,
+        'description' => $descrip,
+        #'copy' => $copy,
+    );
+    divide($u, $b);
+    prep($u, $b);
+    load($u, $b);
+    finish($u);
+}
+
+sub cmd_load {
+    #@ load [-vn] [UPDATE [RANGE]] :: Load records into Voyager
+    my ($delete, $verbose, $dry_run);
+    my $autogen_loaded = 1;
+    my $gen_html = 1;
+    GetOptions(
+        'x|delete' => \$delete,
+        'v|verbose' => \$verbose,
+        'n|dry-run' => \$dry_run,
+        'G|no-auto-generate' => sub { undef $autogen_loaded },
+        'H|no-html' => sub { undef $gen_html },
+    ) or usage;
+    $verbose = 1 if $dry_run;
+    usage if @ARGV > 2;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    if (!defined $b) {
+        fatal "You must specify an update" if !defined $u;
+        my @b = grep { rdstatus("updates/$u/batches/$_") eq PREPARED } batches($u);
+        fatal "Update $u doesn't have any prepped batches" if !@b;
+        $b = $b[0];
+        warning "Assuming you want to load the next prepped batch ($b) in update $u";
+    }
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    if ($verbose) {
+        print STDERR "Dry run...\n" if $dry_run;
+        print "update:  $u\nbatch:   $b\n";
+    }
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    fatal "No such batch: $u $b" if ! -e $bdir;
+    fatal "Batch not prepared: $u $b" if rdstatus($bdir) ne PREPARED;
+    my ($cfile) = find('conf/load.kv', $bdir, $udir, '.');
+    fatal "Load config file not found" if !$cfile || !-e $cfile;
+    my $conf = rdkvfile($cfile);
+    my $interleaved = $conf->{'interleaved'};
+    $interleaved = defined $interleaved && $interleaved =~ /^[YyTt1]/;
+    my $update = rdupdate($u);
+    my $load_type = $update->{'type'} || ADD;
+    my $rec_type = $update->{'marc-type'} || die;
+    my @delete;
+    if ($delete) {
+        fatal "Deletion of previously loaded records is not yet implemented"
+            if $load_type ne DELETE;
+        @delete = $interleaved
+                    ? 'bh'
+                    : $rec_type eq BIB
+                        ? 'b'
+                        : fatal "Can't delete records of type $rec_type";
+    }
+    elsif ($load_type eq DELETE) {
+        fatal "You must always specify -x when doing a load that deletes records";
+    }
+    my $profile = $conf->{'profile'} || fatal "No load profile configured";
+    my $j = mkjobid();
+    my $jdir = "$bdir/jobs/$j";
+    my $file = "$bdir/jobs/$j/records.mrc";
+    my @cmd = (
+        'vload',
+        '-c' => $cfile,
+        '-o' => $j,
+        '-f' => $file,
+        '-i' => $profile, 
+        '-d' => "$jdir/output",
+    );
+    push @cmd, '-n' if $dry_run;
+    if (@delete) {
+        push @cmd, '-S', '-x', @delete;
+    }
+    elsif ($interleaved) {
+        push @cmd, '-m';
+    }
+    if ($dry_run) {
+        print STDERR join(' ', 'command:', @cmd), "\n";
+        return;
+    }
+    mkjob($u, $b, $j);
+    my $job = {
+        'code' => $j,
+        'date' => $now,
+        'file' => $file,
+        'profile' => $profile,
+        'load-type' => $load_type,
+        'interleaved' => $interleaved,
+    };
+    wrkvfile("$jdir/job.kv", $job);
+    wrstatus($jdir, LOADING);
+    # Actually load the records!
+    my $err = system(@cmd);
+    wrstatus($jdir, FINISHED);
+    my $log = "$jdir/output/$j.log";
+    my @results = load_results($log);
+    my %num;
+    my $drops = 0;
+    foreach (@results) {
+        next if $_->{'type'} ne $rec_type;
+        my $action = $_->{'action'};
+        $drops++ if $action eq 'unresolved' || $action eq 'unmatched';
+        $num{$action}++;
+    }
+    my $result;
+    if ($err == 0) {
+        $result = $job->{'result'} = OK;
+        print STDERR "Record load has run\n" if $verbose;
+        wrstatus($jdir, FINISHED);
+        wrstatus($bdir, LOADED);
+        if (!grep { rdstatus("updates/$u/batches/$_") ne LOADED } batches($u)) {
+            # All batches in this update have been loaded
+            wrstatus($udir, LOADED);
+        }
+    }
+    else {
+        $result = $job->{'result'} = ERR;
+        print STDERR "Record load failed\n" if $verbose;
+        wrstatus($jdir, ERROR);
+        wrstatus($bdir, ERROR);
+    }
+    print STDERR "Load results:\n";
+    printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+    $job->{'add'}     = $num{ADD()}    || 0;
+    $job->{'match'}   = $num{MATCH()}  || 0;
+    $job->{'delete'}  = $num{DELETE()} || 0;
+    $job->{'replace'} = $num{REPLACE()} || 0;
+    $job->{'discard'} = ($num{DISCARD()} || 0) + ($num{UNRESOLVED()} || 0) + ($num{UNMATCHED()} || 0);
+    wrkvfile("$jdir/job.kv", $job);
+    aplog('load',
+        'result' => $result,
+        'update' => $u,
+        'batch' => $b,
+        'job' => $j,
+        'count' => $e - $s + 1,
+        'error' => $err,
+    );
+    if ($result eq ERR) {
+        apnext('check', update => $u, batch => $b);
+    }
+    else {
+        aplast('load', update => $u, batch => $b, job => $j);
+        apnext('finish', update => $u, batch => $b);
+    }
+    if ($autogen_loaded) {
+        open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
+        copy($fh, "$jdir/loaded.mrc");
+    }
+    if ($gen_html && $e - $s + 1 <= 5000) {
+        local @ARGV = ('-z', '-j' => $j);
+        cmd_mkhtml();
+    }
+    mkdrops($j) if $job->{'discard'} > 0;
+    run_hook('loaded', update => $u, batch => $b, job => $j);
+}
+
+sub mkdrops {
+    local @ARGV = @_;
+    cmd_mkdrops();
+}
+
+sub cmd_mkdrops {
+    system("$root/bin/mkdrops", @ARGV);
+}
+
+# sub cmd_result {
+#     my $verbose;
+#     GetOptions(
+#         'v|verbose' => \$verbose,
+#     ) or usage;
+#     usage if !@ARGV;
+#     my %num;
+#     foreach my $j (@ARGV) {
+#         my $log = files("updates/*/batches/*/$j/output/*.log");
+#         my @results = load_results($log);
+#         foreach (@results) {
+#             my ($action, $id) = @$_{qw(action id)};
+#             print "$j $action $id\n" if $verbose;
+#             $num{$action}++;
+#         }
+#     }
+#     printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+# }
+
+sub cmd_jobs {
+    #@ jobs [UPDATE] [BATCH] :: List load jobs
+    my $brief;
+    GetOptions(
+        'B|brief' => \$brief,
+    ) or usage;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my $j;
+    #my @dirs;
+    if (defined $b) {
+        foreach $j (jobs($u, $b)) { print $brief ? "$j\n" : "$u $b $j\n" }
+    }
+    elsif (defined $u) {
+        foreach $b (batches($u)) { foreach $j (jobs($u, $b)) { print $brief ? "$j\n" : "$u $b $j\n" } }
+    }
+    else {
+        foreach $u (updates()) { foreach $b (batches($u)) { foreach $j (jobs($u, $b)) { print $brief ? "$j\n" : "$u $b $j\n" } } }
+    }
+    return;
+    #my @dirs = dirs("$dir/*/j?????????");
+    #foreach (@dirs) {
+    #    my @parts = split m{/};
+    #    my $j;
+    #    ($u, $b, $j) = @parts[1,3,5];
+    #    print "$u $b $j\n";
+    #}
+}
+
+sub resolve_update_batch_and_job {
+    my ($u, $b, $j) = @_;
+    my @j;
+    if ($j) {
+        my $jdir = dirs("updates/*/batches/*/jobs/$j");
+        my $bdir = dirname(dirname($jdir));
+        my $udir = dirname(dirname($bdir));
+        return ( basename($udir), basename($bdir), basename($jdir) );
+    }
+    else {
+        ($u, $b) = resolve_update_and_batch($u, $b);
+        fatal "Can't resolve batch" if !defined $b;
+        return ( $u, $b, map { basename($_) } dirs("updates/$u/batches/$b/jobs/*") );
+    }
+}
+
+sub cmd_results {
+    #@ results [-vj] UPDATE [BATCH] | JOB... :: Show detailed load results
+    my ($verbose, $jobs);
+    GetOptions(
+        'v|verbose' => \$verbose,
+        'j|jobs' => \$jobs,
+    ) or exit usage;
+    my @jobs;
+    if ($jobs) {
+        # vblr results -j JOBID...
+        foreach my $j (@ARGV) {
+            my ($u, $b) = job_update_and_batch(@ARGV);
+            push @jobs, [ $u, $b, $j ];
+        }
+    }
+    elsif (@ARGV == 1) {
+        # vblr results UPDATE
+        my ($u) = @ARGV;
+        foreach my $b (batches($u)) {
+            push @jobs, map { [ $u, $b, $_ ] } jobs($u, $b);
+        }
+    }
+    elsif (@ARGV == 2) {
+        # vblr results UPDATE BATCH
+        my ($u, $b) = resolve_update_and_batch(@ARGV);
+        @jobs = map { [ $u, $b, $_ ] } jobs($u, $b);
+    }
+    my %num;
+    my %dup;
+    foreach (@jobs) {
+        my ($u, $b, $j) = @$_;
+        my $udir = "updates/$u";
+        my $bdir = "$udir/batches/$b";
+        my $log = files("$bdir/jobs/$j/output/*.log");
+        my @results = load_results($log);
+        $num{"$_->{'type'} $_->{'action'}"}++ for @results;
+        next if !$verbose;
+        my $g = 0;
+        while (@results) {
+            my $rec = shift @results;
+            $g++;
+            my ($type, $action, $ids) = @$rec{qw(type action records)};
+            my @out = ( $u, $b, $j, $g, $type, $action, @$ids );
+            if (@$ids == 1 && $dup{$ids->[0]}++) {
+                push @out, 'dup';  # Duplicate within the results
+            }
+            while (@results && ! $results[0]->{'head'}) {
+                my $mfhd = shift @results;
+                push @out, ( '(', $mfhd->{'type'}, $mfhd->{'action'}, @{ $mfhd->{'records'} }, ')' );
+            }
+            print join(' ', @out), "\n";
+        }
+        print "\n";
+    }
+    $num{'dup'} = scalar grep { $_ > 1 } values %dup if $verbose;
+    print STDERR "Load results:\n" if $verbose;
+    printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+}
+
+sub cmd_res1 {
+    #@ res1 [UPDATE] [BATCH] :: Show detailed load results
+    my ($verbose, $u, $b, $j, @jobs);
+    GetOptions(
+        'v|verbose' => \$verbose,
+        'j|job=s' => \$j,
+    ) or exit usage;
+    ($u, $b) = @ARGV;
+    ($u, $b, @jobs) = resolve_update_batch_and_job($u, $b, $j);
+    my $bdir = "updates/$u/batches/$b";
+    my %num;
+    foreach my $j (@jobs) {
+        my $log = files("$bdir/jobs/$j/output/*.log");
+        my @results = load_results($log);
+        $num{"$_->{'type'} $_->{'action'}"}++ for @results;
+        next if !$verbose;
+        my $g = 0;
+        while (@results) {
+            my $rec = shift @results;
+            $g++;
+            my ($type, $action, $ids) = @$rec{qw(type action records)};
+            my @out = ( $g, $type, $action, @$ids );
+            while (@results && ! $results[0]->{'head'}) {
+                my $mfhd = shift @results;
+                push @out, ( '(', $mfhd->{'type'}, $mfhd->{'action'}, @{ $mfhd->{'records'} }, ')' );
+            }
+            print join(' ', @out), "\n";
+        }
+        print "\n";
+    }
+    print STDERR "Load results:\n" if $verbose;
+    printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+}
+
+sub cmd_list { goto &cmd_ls }
+
+sub cmd_ls {
+    #@ ls [-v] :: List updates, batches, or record loads
+    my $verbose;
+    GetOptions(
+        'v|verbose' => \$verbose,
+        's|statuses' => sub {
+            print $_->[0], "\n" for @statuses;
+            exit 0;
+        },
+    ) or exit usage;
+    @ARGV = (@ARGV, '.') if @ARGV == 1 && defined $bcur;
+    @ARGV = ('.', '.') if @ARGV == 0 && defined $bcur;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my ($type, @list);
+    if (defined $b) {
+        # List loads of the current batch
+        ($type, @list) = ('loads', rdlist("updates/$u/batches/$b/\@loaded"));
+    }
+    elsif (defined $u) {
+        ($type, @list) = ('batches', rdlist("updates/$u/batches"));
+    }
+    else {
+        ($type, @list) = ('updates', rdlist('updates'));
+    }
+    if (@list) {
+        print STDERR "\u$type:\n" if $verbose;
+        print $_, "\n" for @list;
+    }
+    elsif ($verbose) {
+        print STDERR "No $type to list\n";
+    }
+}
+sub cmd_match {
+    #@ match [UPDATE] [BATCH] :: Predict matching
+    my $verbose;
+    GetOptions(
+        'v|verbose' => \$verbose,
+    ) or usage;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    usage if !defined $u || !defined $b;
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    my @files = glob("$bdir/*/records.mrc");
+    @files = glob("$bdir/jobs/*/records.mrc") if !@files;
+    fatal "No records to match" if !@files;
+    fatal "Huh?" if @files > 1;
+    my $update  = rdupdate($u);
+    my $batch   = rdbatch($u, $b);
+    my ($cfile) = find('conf/load.kv', $bdir, $udir, '.');
+    fatal "Load config file not found" if !$cfile || !-e $cfile;
+    my $conf = rdkvfile($cfile);
+    my $profile = $conf->{'profile'} || fatal "No load profile configured";
+    my $rectype = $update->{'marc-type'} || die;
+    my @delete  = $update->{'delete'} ? qw(-x) : qw();
+    open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
+        or fatal "Can't run vbirule: $!";
+    my @actions = map { split /\s+/ } <$fh1>;
+    open my $fh2, '-|', 'vmatch', '-p' => $profile, '-f' => $files[0],
+        or fatal "Can't run vmatch: $!";
+    local $/ = '';
+    while (<$fh2>) {
+        chomp;
+        my ($num, @matches) = split /\n/;
+        if (@matches == 0) {
+            print "$num add\n";
+            next;
+        }
+        my %match;
+        foreach (@matches) {
+            my ($result, undef, $id) = split /\s+/, $_, 3;
+            push @{ $match{$result} ||= [] }, $id;
+        }
+        if (my $x = delete $match{'X'}) {
+            print join(' ', $num, 'dis', @$x), "\n";
+        }
+        elsif (my $r = delete $match{'R'}) {
+            print join(' ', $num, 'mat', @$r), "\n";
+        }
+        else {
+            print "$num add *\n";
+        }
+    }
+}
+
+sub cmd_www {
+    #@ www [COMMAND [ARG]...]
+    @ARGV = qw(build) if !@ARGV;
+    my $cmd = shift @ARGV;
+    if ($cmd eq 'build') {
+        chdir $root || fatal "Can't cd $root: $!";
+        system(qw(make clean all));
+    }
+    else {
+        usage;
+    }
+}
+
+sub cmd_cat {
+    #@ cat [UPDATE] [BATCH] :: print records in an update or batch
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my ($start, @files) = find_marc($u, $b);
+    fatal "No files to cat" if !@files;
+    system('cat', @files);
+}
+
+sub cmd_less {
+    #@ less [UPDATE] [BATCH] :: show records in an update or batch
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my ($start, @files) = find_marc($u, $b);
+    system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
+}
+
+sub find_marc {
+    my ($u, $b) = @_;
+    my @files;
+    my $i = 1;
+    my $s = 1;
+    if (defined $b) {
+        @files = glob("updates/$u/batches/$b/*/records.mrc");
+        if (!@files) {
+            @files = glob("updates/$u/batches/$b/jobs/*/loaded.mrc");
+            fatal "Multiple jobs for update $u batch $b" if @files > 1;
+            if (!@files) {
+                fatal "No update $u"             if ! -e "updates/$u";
+                fatal "No batch $b in update $u" if ! -e "updates/$u/batches/$b";
+                fatal "No MARC records for update $u batch $b\n";
+            }
+        }
+        $s = rdbatch($u, $b)->{'begin'};
+    }
+    elsif (defined $u) {
+        @files = glob("updates/$u/*.mrc");
+        fatal "No MARC records for update $u\n" if !@files;
+    }
+    else {
+        usage;
+        my $latest = latest();
+        @files = glob("updates/$latest/*.mrc");
+        fatal "No MARC records for the latest update\n" if !@files;
+    }
+    return $s, @files;
+}
+
+sub pipe_marc {
+    my %arg = @_;
+    my ($files, $start, $cmd, $verbose, $wait) = @arg{qw(files start command verbose wait)};
+    my $i = 1;
+    if (@$files > 1) {
+        foreach (@$files) {
+            printf "%d) %s\n", $i++, basename(dirname($_));
+        }
+        ask $i, 'Which file? ';
+        exit 0 if !defined $i;
+    }
+    elsif ($wait && -t 0) {
+        print STDERR "Press <Enter> to view ", $files->[$i-1], ' ... ';
+        my $str = <STDIN>;
+        print STDERR "\n";
+    }
+    elsif ($verbose) {
+        print STDERR "File $files->[$i-1] ...\n";
+    }
+    system(@$cmd, @$files);
+}
+
+sub cmd_show { goto &cmd_less }
+
+sub cmd_version {
+    #@ version :: Print version information for vblr
+    my $vblr = vblr();
+    my ($version, $date) = @$vblr{qw(version date)};
+    print STDERR "vblr version $version last modified $date\n";
+}
+
+sub cmd_check {
+    #@ check :: Check a project's file tree
+    if (tdir('updates')) {
+        if (tlink('base', 'updates/BASE')) {
+            tcount('updates/BASE/*.mrc', 1);
+        }
+        foreach (files('updates/*')) {
+            tcount("$_/*.mrc", 1);
+            tfile("$_/update.kv");
+            my @batches = glob("$_/batches/*");
+            foreach my $b (@batches) {
+                tcount("$b/batch.kv", 1);
+                my @jobs = glob("$_/jobs/*");
+                foreach my $j (@jobs) {
+                    tcount("$j/job.kv", 1);
+                }
+            }
+        }
+    }
+    tdir('bin')  && texec('bin/prep');
+    tdir('conf') && tfile('conf/prep.kv');
+}
+
+sub cmd_walk {
+    projwalk {
+        my ($p, $u, $b, $j) = @_;
+        if ($j) {
+            push @{ $b->{'jobs'} ||= [] }, $j;
+        }
+        elsif ($b) {
+            push @{ $u->{'batches'} ||= [] }, $b;
+        }
+        elsif ($u) {
+            push @{ $p->{'updates'} ||= [] }, $u;
+        }
+    };
+    foreach my $p ($project) {
+        printf "P %s %s %d\n", $status2abbrev{$p->{'status'} || UNKNOWN}, pcode($p), $p->{'count'};
+        foreach my $u (@{ $p->{'updates'} }) {
+            printf "U %s %s %s %d\n", $status2abbrev{$u->{'status'}}, $p->{'code'}, ucode($u), $u->{'count'};
+            foreach my $b (@{ $u->{'batches'} }) {
+                printf "B %s %s %s %s %d\n", $status2abbrev{$b->{'status'}}, $p->{'code'}, $u->{'code'}, bcode($b), $b->{'count'};
+                foreach my $j (@{ $b->{'jobs'} }) {
+                    printf "J %s %s %s %s %s %d\n", $status2abbrev{$j->{'status'}}, $p->{'code'}, $u->{'code'}, $b->{'code'}, jcode($j), $j->{'count'} || $b->{'count'};
+                }
+            }
+        }
+    }
+}
+
+sub cmd_log {
+    my @log = rdlog();
+    foreach (@log) {
+        my ($verb, $date, $count, $update) = @$_{qw(verb date count update)};
+        if (!defined $count) {
+            my $range = $_->{'batch'} || $_->{'range'};
+            if (defined $range && $range =~ /^(\d+)-(\d+)$/) {
+                $count = $2 - $1 + 1;
+            }
+            else {
+                1;
+            }
+        }
+        if ($verb eq 'load') {
+            print "$date Loaded $count records (update $update)\n";
+        }
+        elsif ($verb eq 'add') {
+            print "$date Added $count records (update $update)\n";
+        }
+        elsif ($verb eq 'prep') {
+            print "$date Prepared $count records (update $update)\n";
+        }
+    }
+}
+
+sub cmd_mkhtml {
+    #@ mkhtml [-nzig] [-j JOB] [-m DESCRIP] [-o PATH] [-s URL] [UPDATE [BATCH]] :: Make a web page showing records
+    my $www = rdkvfile("$root/conf/www.kv");
+    my $www_root = $www->{'file-root'};
+    my $url_base = $www->{'url-base'};
+    my $j;
+    my ($dry_run, $title, $description, $inmarc, $outhtml, $outmarc, $link001, $autogen, $gzip);
+    my @stylesheets;
+    GetOptions(
+        'n'   => \$dry_run,
+        'j=s' => \$j,
+        't=s' => \$title,
+        'm=s' => \$description,
+        'o=s' => \$outhtml,
+        's=s' => \@stylesheets,
+        'i'   => \$link001,
+        'g'   => \$autogen,
+        'z'   => \$gzip,
+    ) or usage;
+    @stylesheets = qw(/records/styles.css) if !@stylesheets;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my $code = $project->{'code'};
+    my @links;
+    my $first = 1;
+    if (defined $j) {
+        $link001 = 1;
+        $b = '*' if !defined $b;
+        $u = '*' if !defined $u;
+        my ($inmarcdir) = files("updates/$u/batches/$b/jobs/$j");
+        fatal "No such job: $j" if !$inmarcdir;
+        push @links, map { ('-a' => $_) } rdlinks($inmarcdir);
+        my $bdir = dirname(dirname($inmarcdir));
+        my $udir = dirname(dirname($bdir));
+        $u = basename($udir) if $u eq '*';
+        $b = basename($bdir) if $b eq '*';
+        my $job = rdjob($u, $b, $j);
+        my $load_type = $job->{'load-type'} || ADD;
+        if ($load_type eq DELETE) {
+            $inmarc = "$inmarcdir/output/$j.delete";
+            if (!-e $inmarc) {
+                fatal "No file $j.delete in $inmarcdir/output";
+            }
+            if (!defined $description) {
+                my $when = strftime('%a %-d %b %Y at %-I:%M%P', localtime((stat $inmarc)[9]));
+                $description = "These are the records in job $j that were deleted on $when.";
+            }
+        }
+        else {
+            $inmarc = "$inmarcdir/loaded.mrc";
+            if (!-e $inmarc) {
+                fatal "No loaded.mrc file in $inmarcdir" if !$autogen;
+                open my $fh, '-|', 'vjobget', $j or die "Can't run vjobget: $!";
+                copy($fh, $inmarc);
+            }
+        }
+        $title ||= "Job $j records";
+        if (!defined $description) {
+            my $when = strftime('%a %-d %b %Y at %-I:%M%P', localtime((stat $inmarc)[9]));
+            $description = "These are the records in job $j as they existed in Voyager as of $when.";
+        }
+        $outhtml ||= $j . '.html';
+    }
+    elsif (defined $b) {
+        $inmarc = "updates/$u/batches/$b/\@prepared/records.mrc";
+        my $udesc = $u eq 'BASE' ? 'the base file' : "update $u";
+        $first = $1 if $b =~ /^(\d+)-/;
+        $title ||= "Project $code preview";
+        if (!defined $description) {
+            my $when = strftime('%a %-d %b %Y at %-I:%M%P', localtime((stat $inmarc)[9]));
+            $description = "This is a preview of $udesc (records $b) as prepared for loading on $when.";
+        }
+        push @links, map { ('-a' => $_) } rdlinks("updates/$u/batches/$b");
+    }
+    elsif (defined $u) {
+        $inmarc = files("updates/$u/*.mrc");
+        my $udesc = $u eq 'BASE' ? 'the base file' : "update $u";
+        $title ||= "Project $code records";
+        $description ||= "These are the records in $udesc as they were received.";
+        push @links, map { ('-a' => $_) } rdlinks("updates/$u");
+    }
+    else {
+        usage;
+    }
+    if (!defined $outhtml) {
+        $outhtml = $outmarc = mkid('f') . '.html';
+    }
+    else {
+        $outhtml =~ s/(?:\.html)?$/.html/;
+    }
+    ($outmarc = $outhtml) =~ s/(?:\.html)?$/.mrc/;
+    my @cmd = (
+        'marc2html',
+        '-1Dnh',
+        '-N' => $first,
+        '-t' => $title,
+        '-p' => $description,
+        '-a' => basename($outmarc) . ' Raw MARC records',
+        @links,
+        '-a' => '../ Project page',
+    );
+    #
+    push @cmd, '-s', $_ for @stylesheets;
+    push @cmd, '-i', rdkvfile("$root/conf/catalog.kv")->{'record-link'} if $link001;
+    push @cmd, $inmarc;
+    my $url    = "$url_base/$code/preview/$outhtml";
+    if ($dry_run) {
+        print STDERR "Dry run: @cmd\n";
+        print STDERR "URL:     $url\n";
+        exit 0;
+    }
+    print STDERR "URL: $url\n";
+    my $predir = "$www_root/$code/preview";
+    makedir(dirname(dirname($predir)), dirname($predir), $predir);
+    my ($copy, $err);
+    if ($gzip) {
+        $copy = \&gzip;
+        $err = sub { fatal "gzip to $_[0] failed: $GzipError" };
+        $_ .= '.gz' for $outhtml, $outmarc;
+    }
+    else {
+        $copy = \&copy;
+        $err = sub { fatal "copy to $_[0] failed: $!" };
+    }
+    print STDERR "Generating output files:\n";
+    for ($outhtml, $outmarc) {
+        $_ = $predir . '/' . $_;
+        print $_, "\n";
+    }
+    open my $fh, '-|', @cmd or die "Can't run marc2html: $!";
+    $copy->($fh,     $outhtml) or $err->($outhtml);
+    $copy->($inmarc, $outmarc) or $err->($outmarc);
+}
+
+sub cmd_mkview {
+    #@ mkview [-v] [FILE] :: Make a "view" of arbitrary records
+    my ($verbose);
+    GetOptions('v' => \$verbose) or usage;
+    @ARGV = '/dev/stdin' if !@ARGV;
+    # XXX
+}
+
+
+sub cmd_drops {
+    #@ drops [-MOj] UPDATE [BATCH] | JOB... :: list or output dropped records
+    my ($verbose, $jobs);
+    my ($marc, $original);
+    GetOptions(
+        'M|marc-records' => \$marc,
+        'O|original' => sub { $marc = $original = 1 },
+        'v|verbose' => \$verbose,
+        'j|jobs' => \$jobs,
+    ) or exit usage;
+    my @jobs;
+    if ($jobs) {
+        # vblr drops -j JOBID...
+        foreach my $j (@ARGV) {
+            my ($u, $b) = job_update_and_batch(@ARGV);
+            push @jobs, [ $u, $b, $j ];
+        }
+    }
+    elsif (@ARGV == 1) {
+        # vblr drops UPDATE
+        my ($u) = @ARGV;
+        foreach my $b (batches($u)) {
+            push @jobs, map { [ $u, $b, $_ ] } jobs($u, $b);
+        }
+    }
+    elsif (@ARGV == 2) {
+        # vblr drops UPDATE BATCH
+        my ($u, $b) = resolve_update_and_batch(@ARGV);
+        @jobs = map { [ $u, $b, $_ ] } jobs($u, $b);
+    }
+    foreach (@jobs) {
+        my ($u, $b, $j) = @$_;
+        my $udir = "updates/$u";
+        my $bdir = "$udir/batches/$b";
+        my %num;
+        my $offset = 0;
+        if ($original) {
+            my $batch = rdbatch($u, $b);
+            $offset += $batch->{'begin'} - 1;
+        }
+        my $jdir = "$bdir/jobs/$j";
+        my ($log) = files("$jdir/output/*.log");
+        next if !defined $log;  # Huh?
+        my @drops = drops($log);
+        if ($marc) {
+            my %dropped = map { $_->[0] + $offset => 1 } @drops;
+            my $src = $original ? files("$udir/*.mrc") : "$jdir/records.mrc";
+            my $n = 0;
+            marc($src, sub {
+                $n++ if substr($_, 6, 1) !~ /[uvxy]/;
+                print if $dropped{$n};
+            });
+        }
+        else {
+            print join(' ', $u, $b, $j, @$_), "\n" for @drops;
+        }
+    }
+}
+
+sub cmd_carry {
+    #@ carry UPDATE RECLIST [-m DESCRIP] [NAME] :: Carry records over from one update to a new one
+    my ($descrip, $dry_run);
+    GetOptions(
+        'n|dry-run' => \$dry_run,
+        'm|description=s' => \$descrip,
+    ) or usage;
+    @ARGV == 2 || @ARGV == 3 or usage;
+    my ($usrc, $reclist, $u) = @_;
+    ask $u,       'Update code: ', "$usrc-carryover" if !defined $u;
+    ask $descrip, 'Description: ' if !defined $descrip;
+    my $update = update($usrc) || fatal "No such update: $usrc";
+    my @rec;
+    if ($reclist =~ /^\w+$/) {
+        @rec = records_in_update_with_load_result($usrc, $reclist);
+    }
+    else {
+        @rec = records_in_update($usrc, map {
+            /^(\d+)-(\d+)$/ ? [ $1, $2 ]
+                            : /^(\d+)$/ ? [ $1, $1 ]
+                                        : usage;
+            } split /,/, $reclist
+        );
+    }
+    open my $fh1, '>', "inbox/$u.mrc" or fatal "Can't open inbox/$u.mrc for writing: $!";
+    my $src = file("updates/$usrc/*.mrc");
+    marc($src, sub {
+        my ($n) = @_;
+        if (@rec && $rec[0] == $n) {
+            print $fh1 $_;
+            shift @rec;
+        }
+    });
+    #add(
+    #    'type' => $type,
+    #    'update' => $u,
+    #    'file' => $file,
+    #    'description' => $descrip,
+    #    'copy' => $copy,
+    #);
+}
+
+sub cmd_latest {
+    my $latest = latest();
+    exit 2 if !defined $latest;
+    print $latest, "\n";
+}
+
+sub cmd_project {
+    print $project->{'code'}, "\n";
+}
+
+sub cmd_notify {
+    #@ notify [-d CONFDIR] [-vn] [-D key=val]... [-H HDRFILE]
+    my ($verbose, $dry_run);
+    my $confdir = 'conf';
+    my ($tmpl, $body, $from, $subj, @to, @cc, @bcc);
+    my @sendmail;
+    my (%conf, %var);
+    GetOptions(
+        'v|verbose' => \$verbose,
+        'n|dry-run' => \$dry_run,
+        'd|conf-dir=s' => \$confdir,
+        'D|define=s' => sub {
+            my ($key, $val) = split /=/, $_[1], 2;
+            usage if !defined $val;
+            $var{$key} = $val;
+        },
+        'T|template=s' => \$tmpl,
+        'B|body=s'     => \$body,
+        'f|from=s'     => \$from,
+        's|subject=s'  => \$subj,
+        't|to=s'       => \@to,
+        'c|cc=s'       => \@cc,
+        'b|bcc=s'      => \@bcc,
+    ) or usage;
+    %conf = ( %{ rdkvfile("$confdir/notify.kv") }, %var );
+    $conf{'template'} = $tmpl if defined $tmpl;
+    $conf{'body'}     = $body if defined $body;
+    $conf{'from'}     = $from if defined $from;
+    $conf{'subject'}  = $subj if defined $subj;
+    $conf{'to'}  = join(', ', @to ) if @to;
+    $conf{'cc'}  = join(', ', @cc ) if @cc;
+    $conf{'bcc'} = join(', ', @bcc) if @bcc;
+    if (defined $conf{'sendmail'}) {
+        @sendmail = split /\s+/, $conf{'sendmail'};
+    }
+    else {
+        my ($sendmail) = grep { -x $_ } map { "$_/sendmail" } split /:/, $ENV{'PATH'};
+        fatal "sendmail can't be determined; must specify in config" if !defined $sendmail;
+        @sendmail = ($sendmail, qw(-oi -t));
+    }
+    my $fh;
+    if ($dry_run) {
+        $fh = \*STDERR;
+    }
+    else {
+        open $fh, '|-', @sendmail or die "Can't run sendmail: $!";
+    }
+    makemail(
+        %conf,
+        'attachments' => [ @ARGV ],
+        'code' => sub { print $fh $_ },
+    );
+}
+
+# --- Other functions
+
+sub warning {
+    print STDERR 'WARNING: ', $_, "\n" for @_;
+}
+
+sub quit {
+    print STDERR $_, "\n" for @_;
+    exit 3;
+}
+
+sub fatal {
+    print STDERR 'FATAL: ', $_, "\n" for @_;
+    exit 2;
+}
+
+sub throw {
+    my ($exc, $msg) = @_;
+    $! = $msg;
+    die($exc."\n");
+}
+
+sub run_hook {
+    my ($hook, %arg) = @_;
+    my @where = ($pdir);
+    my ($u, $b, $j) = @arg{qw(update batch job)};
+    if (defined $u) {
+        push @where, my $udir = "$pdir/updates/$u";
+        push @where, "$udir/batches/$b"         if defined $b;
+        push @where, "$udir/batches/$b/jobs/$j" if defined $j;
+    }
+    my $f = find("bin/hook.$hook", reverse @where);
+    if (defined $f && -x $f) {
+        local %ENV = %ENV;
+        @ENV{qw(VBLR_PROJECT VBLR_UPDATE VBLR_BATCH VBLR_JOB)} = map { $_ || '' } ($project->{'code'}, $u, $b, $j);
+        system($f);
+    }
+}
+
+sub drops {
+    my ($log) = @_;
+    open my $fh, '-|', 'vbilog', $log or die;
+    local $/ = '';
+    my @out;
+    while (<$fh>) {
+        if (/\A(\d+)/) {
+            my $num = $1;
+            push @out, [ $num, $1 ] if /^[BA] (un[rm]|dis)/m;
+        }
+    }
+    close $fh;
+    return @out;
+}
+
+sub count_records_with_status {
+    my ($u, $b, %want) = @_;
+    $u = '*' if !defined $u;
+    $b = '*' if !defined $b;
+    my $count = 0;
+    my @updates = glob("updates/$u");
+    foreach my $udir (@updates) {
+        next if -l $udir;
+        my @batches = glob("$udir/batches/$b");
+        if (!@batches) {
+            # Update hasn't been divided
+            next if !$want{rdstatus($udir)};
+            $count += rdupdate(basename($udir))->{'count'};
+        }
+        else {
+            foreach my $bdir (@batches) {
+                next if !$want{rdstatus($bdir)};
+                $count += rdbatch(basename($udir), basename($bdir))->{'count'};
+            }
+        }
+    }
+    return $count;
+}
+
+sub askbool($) {
+    my ($prompt) = @_;
+    fatal "Can't ask for input in a non-interactive session" if ! -t 0;
+    print STDERR $prompt, ' [yN] ';
+    my $val = <STDIN>;
+    return defined($val) && $val =~ /^[TtYy1]/;
+}
+
+sub ask(\$$;$) {
+    my ($ref, $prompt, $default) = @_;
+    if (! -t 0) {
+        fatal "Can't ask for input in a non-interactive session" if !defined $default;
+        $$ref = $default;
+        return;
+    }
+    $prompt .= "[$default] " if defined $default;
+    print STDERR $prompt;
+    my $val = <STDIN>;
+    if (!defined $val || $val eq $/) {
+        quit "Cancelled" if !defined $default;
+        $val = $default;
+    }
+    chomp $val;
+    $$ref = $val;
+}
+
+sub randhex {
+    open my $fh, '<', '/dev/urandom' or fatal;
+    my $buffer = "\0" x 4;
+    my $randstr = sysread $fh, $buffer, 4;
+    my $hex = sha1_hex($randstr, $$, $0, time, getcwd, @_);
+    return $hex;
+}
+
+sub mkid {
+    my ($char) = @_;
+    return $char . substr(randhex(), 0, 9);
+}
+
+sub mkjobid { mkid('j') }
+
+sub cmp_batches_by_range {
+    my ($ab, $ae) = (@$a{qw(begin end)});
+    my ($bb, $be) = (@$b{qw(begin end)});
+    $ab <=> $bb or $ae <=> $be;
+}
+
+sub cmp_ranges {
+    my ($ab, $ae) = ($a =~ /^(\d+)-(\d+)/);
+    my ($bb, $be) = ($b =~ /^(\d+)-(\d+)/);
+    $ab <=> $bb or $ae <=> $be;
+}
+
+sub latest {
+    my @u = updates() or fatal "No updates";
+    return $u[-1];
+}
+
+sub range {
+    my ($b) = @_;
+    $b =~ /^(\d+)-(\d+)/ or fatal "Not a range: $b";
+    return ($1, $2);
+}
+
+sub mkbatch {
+    my ($u, $b) = @_;
+    my ($s, $e) = range($b);
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    my $batch = {
+        'created' => $now,
+        'update' => $u,
+        'code' => $b,
+        'begin' => $s,
+        'end' => $e,
+        'count' => $e - $s + 1,
+    };
+    makedir("$udir/batches", $bdir, "$bdir/jobs");
+    wrstatus($bdir, NEW);
+    wrkvfile("$bdir/batch.kv", $batch);
+    aplist("$udir/batches", $b);
+    return $bdir;
+}
+
+sub job {
+    my ($u, $b, $j) = @_;
+    return rdkvfile("updates/$u/batches/$b/jobs/$j/job.kv");
+}
+
+sub job_update_and_batch {
+    my ($j) = @_;
+    my @dirs = dirs("updates/*/batches/*/jobs/$j");
+    foreach (@dirs) {
+        return ($2, $3) if m{^(updates/([^/]+))/batches/([^/]+)}
+                        && ! -l $1;
+    }
+    return;
+}
+
+sub squash_ranges {
+    my @r;
+    foreach (sort { $a->[0] <=> $b->[0] } @_) {
+        my ($b, $e) = @$_;
+        if (!@r) {
+            push @r, $_;
+        }
+        elsif ($b == $r[-1][1] + 1) {
+            $r[-1][1] = $e;
+        }
+        else {
+            push @r, $_;
+        }
+    }
+    return @r;
+}
+
+sub processor {
+    my ($script) = @_;
+    fatal "No such script: $script" if !-e $script;
+    my $proc = MARC21::Proc->new($script)->compile;
+    return sub {
+        my ($rd, $wr) = @_;
+        while (my $rec = $rd->()) {
+            my @out = $proc->process($rec);
+            $wr->(@out) if @out;
+        }
+    };
+}
+
+sub resolve_update_range {
+    my ($u, $r) = @_;
+    my ($b, $e);
+    if (!defined $r) {
+        $u = latest() if !defined $u;
+        $b = 1;
+        $e = 'n';
+    }
+    else {
+        $r =~ /^(\d+)-(n|\d*)$/ or usage;
+        ($b, $e) = ($1, $2||'n');
+    }
+    my $udir = "updates/$u";
+    fatal "No such update: $u" if ! -d $udir;
+    if ($e eq 'n') {
+        my ($file, @etc) = glob("$udir/*.mrc");
+        fatal "No MARC record files for update $u" if !defined $file;
+        fatal "Too many MARC record files for update $u" if @etc;
+        $e = count($file);
+    }
+    fatal "End of range precedes beginning of range" if $b > $e;
+    return ($u, $b, $e);
+}
+
+sub reader {
+    my $t = pop @_;
+    my @files = @_;
+    my $n = 0;
+    return sub {
+        foreach my $f (@files) {
+            my $m = 0;
+            open my $fh, '<', $f or die "Can't open file $f: $!";
+            while (<$fh>) {
+                my $result = eval { $t->($n++, $f, $m++); 1 } or next;
+                fatal "Reader error: $!" if $result eq ERR;
+                return if $result eq STOP;
+                last   if $result eq NEXT;
+            }
+        }
+    };
+}
+
+sub writer {
+    my ($f, $append) = @_;
+    my $fh;
+    my $mode = $append ? '>>' : '>';
+    return sub {
+        # local $| = 1;
+        if (!defined $fh) {
+            open $fh, $mode, $f or fatal "Can't open file $f: $!";
+        }
+        print $fh @_;
+    }
+}
+
+sub makedir {
+    foreach my $dir (@_) {
+        -d $dir || mkdir($dir) || fatal "Can't mkdir $dir: $!";
+    }
+    return 1;
+}
+
+sub orient {
+    my ($udir, $bdir);
+    if (defined $pdir) {
+        $pdir = "$root/$pdir" if substr($pdir, 0, 1) ne '/';
+        chdir $pdir or fatal "Can't chdir $pdir: $!";
+        return if $cmd eq 'init' || $cmd eq 'projects';
+        fatal "Not a project directory: $pdir" if ! -e 'project.kv';
+    }
+    else {
+        while (! -e 'project.kv') {
+            fatal "Not in a project directory" if getcwd eq '/';
+            if (-e 'batch.kv') {
+                $bdir = getcwd;
+            }
+            elsif (-e 'update.kv') {
+                $udir = getcwd;
+            }
+            chdir '..';
+        }
+        $pdir = getcwd;
+    }
+    if ($pdir =~ m{^$root/groups/([^/]+)/projects/([^/]+)$}) {
+        $pcur = "$1/$2";
+    }
+    elsif ($pdir =~ m{^$root/([^/]+/[^/]+)$}) {
+        $pcur = $1;
+    }
+    else {
+        fatal "I don't know what to do when a project is not within $root";
+    }
+    if (defined $udir) {
+        if ($udir =~ m{^$pdir/updates/([^/]+)$}) {
+            $ucur = $1;
+            if (defined $bdir) {
+                if ($bdir =~ m{^$udir/batches/([^/]+)$}) {
+                    $bcur = $1;
+                }
+            }
+        }
+    }
+    else {
+        undef $bdir;
+    }
+    $project = rdproject();
+    if (!$project->{'id'}) {
+        my $id = $project->{'id'} = randhex();
+        wrproject($project);
+        symlink getcwd, "$root/id/$id";
+    }
+    if (! -e 'vblr.kv') {
+        warning "No vblr.kv, consider adding one" if $cmd ne 'init';
+    }
+    else {
+        my $version = rdkvfile('vblr.kv')->{'version'};
+        check_version_compatibility($version);
+    }
+}
+
+sub check_version_compatibility {
+    # XXX
+}
+
+# sub add_update {
+#     my ($u, $file, $descrip, $copy) = @_;
+#     $u !~ /\s/ or fatal "Update names mustn't contain spaces";
+#     $u !~ m{/:} or fatal "Update names mustn't contain / or :";
+#     $file = File::Spec->rel2abs($file);
+#     my $copier = $copy ? \&copy : \&move;
+#     my $udir = "updates/$u";
+#     -d 'updates/BASE' || fatal "You must add the project base first";
+#     ! -d $udir || fatal "Update $u has already been added";
+#     print STDERR "Checking file $file...\n";
+#     my %marc = marc($file);
+#     print STDERR OK, "\n";
+#     my $count = $marc{'count'};
+#     my $b = $project->{'count'} + 1;
+#     my $e   = $b + $count - 1;
+#     $project->{'count'} += $count;
+#     makedir($udir);
+#     my $filename = clean_filename(basename($file));
+#     $filename =~ s/(\.[^.]*)?$/.mrc/;
+#     $copier->($file, "$udir/$filename")
+#         or fatal "Can't add file $file: $!";
+#     my %update = (
+#         'code'   => $u,
+#         'date'   => $now,
+#         'source' => $file,
+#         %marc,
+#         'count'  => $count,
+#     );
+#     wrkvfile("$udir/update.kv", \%update);
+#     wrproject($project);
+# }
+
+sub apline {
+    my ($file, $str, $args) = @_;
+    if (open my $fh, '>>', $file) {
+        foreach my $key (sort keys %$args) {
+            my $val = $args->{$key};
+            $str .= " ${key}:${val}" if defined $val;
+        }
+        print $fh $str, "\n";
+        close $fh;
+    }
+    else {
+        warning "Can't open $file for writing: $!";
+    }
+}
+
+sub rdlinks {
+    my ($d) = @_;
+    open my $fh, '<', "$d/links" or return;
+    my @links;
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+        chomp;
+        push @links, $_;
+    }
+    close $fh;
+    return @links;
+}
+
+sub rdlog {
+    open my $fh, '<', 'project.log'
+        or fatal "Can't open project.log for reading: $!";
+    my @log;
+    while (<$fh>) {
+        next if !/^(\d{8}T\d{6}) (\S+)(?: (.*))?$/;
+        my ($timestamp, $verb) = ($1, $2);
+        my %arg;
+        %arg = map { split /:/ } split /\s+/, $3 if defined $3;
+        @arg{qw(date verb)} = ($timestamp, $verb);
+        push @log, \%arg;
+    }
+    close $fh;
+    return @log;
+}
+
+sub aplog {
+    my ($action, %arg) = @_;
+    my $t = delete $arg{'timestamp'} || $now;
+    apline('project.log', "$t $action", \%arg);
+}
+
+sub aplast {
+    my $action = shift;
+    my $id = $project->{'id'};
+    apline("$root/last.log", "$now $id $action", {@_});
+}
+
+sub apnext {
+    my $action = shift;
+    my $id = $project->{'id'};
+    apline("$root/next.log", "$now $id $action", {@_});
+}
+
+sub rdkvfile {
+    my ($f) = @_;
+    open my $fh, '<', $f or fatal "Can't open $f: $!";
+    my %kv;
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+        chomp;
+        my ($key, $val) = split /\s+/, $_, 2;
+        $kv{$key} = $val;
+    }
+    #$kv{'path'} = dirname($f);
+    close $fh;
+    return \%kv;
+}
+
+sub wrkvfile {
+    my ($f, $kv, $append) = @_;
+    $kv ||= {};
+    my $mode = $append ? '>>' : '>';
+    open my $fh, $mode, $f or fatal "Can't open $f: $!";
+    foreach my $k (sort keys %$kv) {
+        my $v = $kv->{$k};
+        print $fh "$k $v\n" if defined $v && !ref $v;
+    }
+    close $fh;
+}
+
+sub files {
+    my @files = grep { -e } map { glob($_) } @_;
+    return @files if wantarray;
+    fatal "No files: @_" if !@files;
+    fatal "Multiple files: @_" if @files > 1;
+    return $files[0];
+}
+
+sub dirs {
+    my @dirs = grep { -d } map { glob($_) } @_;
+    return @dirs if wantarray;
+    fatal "No dirs: @_" if !@dirs;
+    fatal "Multiple dirs: @_" if @dirs > 1;
+    return $dirs[0];
+}
+
+sub updates {
+    my %want = map { defined $_ ? ($_ => 1) : () } @_;
+    my @u;
+    foreach my $u (rdlist('updates')) {
+        push @u, $u if !%want || $want{$u};
+    }
+    return @u;
+}
+
+sub batches {
+    my $u = shift;
+    my %want = map { defined $_ ? ($_ => 1) : () } @_;
+    my @b;
+    foreach (rdlist("updates/$u/batches")) {
+        push @b, $_ if !%want || $want{$_};
+    }
+    return @b;
+}
+
+sub jobs {
+    my $u = shift;
+    my $b = shift;
+    my @j;
+    if (!defined $u) {
+        foreach $u (updates(@_)) {
+            push @j, map { rdlist("updates/$u/batches/$_/jobs") } batches($u)
+        }
+    }
+    elsif (!defined $b) {
+        @j = map { rdlist("updates/$u/batches/$_/jobs") } batches($u, @_);
+    }
+    else {
+        my %want = map { defined $_ ? ($_ => 1) : () } @_;
+        @j = grep { !@_ || $want{$_} } rdlist("updates/$u/batches/$b/jobs");
+    }
+    # @j = grep { $want{$_} } @j if %want;
+    # foreach my $j (rdlist("updates/$u/batches/$b/jobs")) {
+    #     push @j, $j if !%want || $want{$j};
+    # }
+    return @j;
+}
+
+sub rdproject {
+    rdkvfile('project.kv');
+}
+
+sub wrproject {
+    my ($kv) = @_;
+    wrkvfile('project.kv', $kv);
+}
+
+sub rdupdate {
+    my ($u) = @_;
+    rdkvfile("updates/$u/update.kv");
+}
+
+sub wrupdate {
+    my ($u, $kv) = @_;
+    wrkvfile("updates/$u/update.kv", $kv);
+}
+
+sub rdbatch {
+    my ($u, $b) = @_;
+    rdkvfile("updates/$u/batches/$b/batch.kv");
+}
+
+sub wrbatch {
+    my ($u, $b, $kv) = @_;
+    wrkvfile("updates/$u/batches/$b/batch.kv", $kv);
+}
+
+sub rdjob {
+    my ($u, $b, $j) = @_;
+    rdkvfile("updates/$u/batches/$b/jobs/$j/job.kv");
+}
+
+sub wrjob {
+    my ($u, $b, $j, $kv) = @_;
+    wrkvfile("updates/$u/batches/$b/jobs/$j/job.kv", $kv);
+}
+
+sub rdstatus {
+    my ($dir) = @_;
+    my %status = map { basename($_) => 1 } glob("$dir/\@*");
+    foreach (map { $_->[0] } @statuses) {
+        return $_ if exists $status{$_} && exists $status2abbrev{$_};
+    }
+    return UNKNOWN;
+}
+
+sub wrstatus {
+    my ($dir, $status) = @_;
+    my %status = map { basename($_) => 1 } files("$dir/@*");
+    delete $status{$status};
+    my @set = keys %status;
+    if (@set > 1) {
+        warning "Multiple statuses set in $dir";
+        foreach (map { $_->[0] } @statuses) {
+            return if exists $status{$_}
+                   && rename "$dir/$_", "$dir/$status";
+        }
+    }
+    elsif (@set == 1) {
+        return if rename "$dir/$set[0]", "$dir/$status";
+    }
+    else {
+        return if makedir("$dir/$status");
+    }
+    fatal "Can't set status $status on $dir: $!";
+}
+
+sub count {
+    my ($file) = @_;
+    open my $fh, '<', $file or fatal "Can't open file $file: $!";
+    local $/ = "\x1d";
+    my $count = 0;
+    while (<$fh>) {
+        $count++ if substr($_, 6, 1) !~ /[uvxy]/;
+    }
+    return $count;
+}
+
+sub projwalk(&@) {
+    my ($f) = @_;
+    $project->{'status'} = rdstatus('.');
+    $f->($project);
+    my @u = updates();
+    foreach my $u (@u) {
+        my $update = rdupdate($u);
+        $update->{'status'} = rdstatus("updates/$u");
+        $f->($project, $update);
+        my @b = batches($u);
+        foreach my $b (@b) {
+            my $batch = rdbatch($u, $b);
+            $batch->{'status'} = rdstatus("updates/$u/batches/$b");
+            $f->($project, $update, $batch);
+            my @j = jobs($u, $b);
+            foreach my $j (@j) {
+                my $job = job($u, $b, $j);
+                $job->{'status'} = rdstatus("updates/$u/batches/$b/jobs/$j");
+                $f->($project, $update, $batch, $job);
+            }
+        }
+    }
+}
+
+sub marc {
+    my ($file, $proc) = @_;
+    my $fh;
+    if (ref $file) {
+        $fh = $file;
+    }
+    else {
+        open $fh, '<', $file or fatal "Can't open file $file: $!";
+    }
+    my %marc;
+    local $/ = "\x1d";
+    my ($n, $d, $S) = (0, 0, 0);
+    my ($h, $a, $b, $T) = (0, 0, 0, 0);
+    my ($m, $u, $E) = (0, 0, 0);
+    my $cnt = 0;
+    my $num_errors = 0;
+    my %sig;
+    my ($rec_status, $rec_type, $rec_encoding) = ('') x 3;
+    my @errors;
+    while (<$fh>) {
+        $cnt++;
+        $proc->($cnt) if $proc;
+        my @err;
+        my $sta = substr($_, 5, 1);
+            if ($sta =~ /[acnp]/) { $n++ }
+            elsif ($sta eq 'd')   { $d++ }
+            else { $S++; push @err, "Unrecognized record status: $sta"; $rec_status = UNRECOGNIZED }
+        my $typ = substr($_, 6, 1);
+            if ($typ =~ /[uvxy]/) { $h++ }
+            elsif ($typ =~ /[acdefgijkmoprt]/) { $b++ }
+            elsif ($typ eq 'z')                { $a++ }
+            else { $T++; push @err, "Unrecognized record type: $typ"; $rec_type = UNRECOGNIZED }
+        my $enc = substr($_, 9, 1);
+            if ($enc eq ' ')      { $m++ }
+            elsif ($enc eq 'a')   { $u++ }
+            else { $E++; push @err, "Unrecognized record encoding: $enc"; $rec_encoding = UNRECOGNIZED }
+        my $sig = substr($_, 10, 2) . substr($_, 20, 4);
+        if ($sig ne '224500') {
+            push @err, "Invalid record signature: $sig";
+            $sig{$sig}++;
+        }
+        if (@err) {
+            push @errors, [ $cnt, @err ];
+            $num_errors += scalar @err;
+        }
+    }
+    close $fh;
+    my $sta = '';
+        $sta .= 'n' if $n;
+        $sta .= 'd' if $d;
+    $rec_status ||= $record_status{$sta || NONE} || MIXED;
+    my $typ = '';
+        $typ .= 'a' if $a;
+        $typ .= 'b' if $b;
+        $typ .= 'h' if $h;
+    $rec_type ||= $record_type{$typ || NONE} || MIXED;
+    my $enc = '';
+        $enc .= 'm' if $m;
+        $enc .= 'u' if $u;
+    $rec_encoding ||= $record_encoding{$enc || NONE} || MIXED;
+    %marc = (
+        %marc,
+        'status'   => $rec_status,
+        'type'     => $rec_type,
+        'encoding' => $rec_encoding,
+        'error-count' => $num_errors,
+        'errors'   => \@errors,
+        'count'    => $cnt,
+    );
+    if (keys(%sig) == 1) {
+        my ($sig) = keys %sig;
+        fatal "Unrecognized record signature: $sig" if $sig ne '224500';
+    }
+    elsif (keys(%sig) > 1) {
+        push @{ $marc{'warnings'} ||= [] }, 'Some records have invalid signatures';
+    }
+    return %marc;
+}
+
+sub usage_commands {
+    my ($commands, $wcmd, $wargs) = commands();
+    print STDERR "usage: vblr COMMAND [ARG]...\n";
+    print STDERR "commands:\n";
+    foreach (@$commands) {
+        printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_;
+    }
+    exit 1;
+}
+
+sub usage {
+    my ($commands, $wcmd, $wargs) = commands();
+    if (my ($c) = grep { $_->[0] eq $cmd } @$commands) {
+        printf STDERR "usage: vblr %s %s\n", @$c[0..1];
+        exit 1;
+    }
+    print STDERR "usage: vblr COMMAND [ARG]...\n";
+    exit 1;
+}
+
+sub commands {
+    open my $fh, '<', $0 or return;
+    my ($wcmd, $wargs) = (0, 0);
+    my ($lcmd, $largs);
+    my @commands;
+    while (<$fh>) {
+        next if !s/^\s*#@ (\S+)(?:\s+(.+))?\s+::\s+(.+)//;
+        my ($cmd, $args, $desc) = ($1, $2 || '', $3);
+        chomp;
+        push @commands, [ $cmd, $args, $desc ];
+        ($lcmd, $largs) = (length $cmd, length $args);
+        $wcmd = $lcmd if $lcmd > $wcmd;
+        $wargs = $largs if $largs > $wargs;
+    }
+    close $fh;
+    return ([ sort { lc $a->[0] cmp lc $b->[0] } @commands ], $wcmd, $wargs);
+}
+
+sub export_as_yaml {
+    my ($data) = @_;
+    print YAML::Dump($data);
+}
+
+sub batch_range {
+    my ($b, $u) = @_;
+    $b =~ /^0*(\d+)-(?:n|0*(\d+))?$/ or fatal "Not a valid range: $b";
+    my ($s, $e) = ($1, $2);
+    $e = rdupdate($u)->{'count'} if !defined $e;
+    return ($s, $e, "$s-$e");
+}
+
+sub resolve_update_and_batch {
+    return grep { defined $_ } ($ucur, $bcur) if @_ == 0;
+    if (@_ == 1) {
+        # vblr foo BASE
+        return ($_[0]) if $_[0] ne '.';
+        # vblr foo .
+        return ($ucur, $bcur) if defined $bcur;
+        return ($ucur) if defined $ucur;
+        fatal "Not in an update";
+    }
+    elsif (@_ == 2) {
+        my ($u, $b) = @_;
+        if ($u eq '.') {
+            fatal "Not in an update directory" if !defined $ucur;
+            return ($ucur, $b) if $b ne '.';
+            fatal "Not in a batch directory" if !defined $bcur;
+            return ($ucur, $bcur);
+        }
+        elsif ($b eq '.') {
+            # vblr foo BASE .
+            usage;
+        }
+        elsif ($b =~ /^(\d+)\+$/) {
+            my $udir = "updates/$u";
+            fatal "No such update: $u" if ! -d $udir;
+            my $bb = $1;
+            ($b) = grep {
+                my ($begin, $end) = split /-/;
+                $begin eq $bb
+            } batches($u);
+            fatal "No such batch: $b" if !defined $b;
+            return ($u, $b);
+        }
+        elsif ($b =~ /^\+(\w+)$/) {
+            my $udir = "updates/$u";
+            my $s = '@' . ($1 || NEW);
+            fatal if !defined $status2abbrev{$s};
+            foreach (batches($u)) {
+                if (rdstatus("$udir/batches/$_") eq $s) {
+                    $b = $_;
+                    last;
+                }
+            }
+            fatal "No such batch: $b" if !defined $b;
+            return ($u, $b);
+        }
+        else {
+            $b =~ s/-n?$/'-' . count_update($u)/e;
+            return ($u, $b);
+        }
+    }
+    else {
+        usage;
+    }
+}
+
+sub add {
+    my %arg = @_;
+    my ($type, $proto, $u, $file, $descrip, $copy, $redo) = @arg{qw(type prototype update file description copy redo)};
+    # Look at the file
+    print STDERR "Checking file $file...\n";
+    my %marc = marc($file);
+    if ($type eq DELETE) {
+        $marc{'status'} eq DELETE || fatal "Deletions must have status d";
+    }
+    else {
+        $marc{'status'} ne DELETE || fatal "Additions must not have status d";
+    }
+    my $count  = delete $marc{'count'};
+    my $errors = delete $marc{'error-count'};
+    if ($errors) {
+        print STDERR ERR, " $errors error(s) in $count records\n";
+        if (-t 0) {
+            ask my $continue, 'Continue? ', 'N';
+            fatal "Cancelled" if $continue !~ /^[Yy]/;
+        }
+    }
+    else {
+        print STDERR OK, " $count records\n";
+    }
+    # Set up the update dir
+    my $verb = 'add';
+    my $udir = "updates/$u";
+    if ($u eq 'BASE') {
+        ! -d $udir || fatal "Base has already been added";
+        $verb = 'base';
+        symlink $udir, 'base'
+            or fatal "Can't make symlink: $!";
+    }
+    else {
+        ! -d $udir        || fatal "Update $u has already been added";
+        $u !~ /\s/        || fatal "Update names mustn't contain spaces";
+        $u !~ m{/:}       || fatal "Update names mustn't contain / or :";
+        -d 'updates/BASE' || fatal "You must add the project base first";
+    }
+    makedir('updates', $udir);
+    makedir ("$udir/batches") if !$arg{'historical'};
+    # Ingest the file of MARC records
+    $file = File::Spec->rel2abs($file);
+    my $filename = basename(clean_filename($file));
+    $filename =~ s/(\.[^.]*)?$/.mrc/;
+    my $copier = $copy ? \&copy : \&move;
+    $copier->($file, "$udir/$filename")
+        or fatal "Can't move/copy file $file to $udir/$filename: $!";
+    # Write metadata and log
+    my %update;
+    if (defined $proto) {
+        my $prodir = "prototypes/$proto";
+        copy_bin($prodir, $udir)  if -d "$prodir/bin";
+        copy_conf($prodir, $udir) if -d "$prodir/conf";
+        %update = ( %{ rdkvfile("$prodir/update.kv") }, 'prototype' => $proto );
+    }
+    %update = (
+        %update,
+        'created' => $now,
+        'type' => $type,
+        'code' => $u,
+        'description' => $descrip,
+        'source' => $file,
+        'count' => $count,
+        $redo ? ('redo' => 1) : (),
+    );
+    $marc{'errors'} = scalar @{ delete $marc{'errors'} || [] };
+    foreach (keys %marc) {
+        $update{"marc-$_"} = $marc{$_};
+    }
+    $project->{'count'} += $count if !$redo;
+    wrproject($project);
+    wrupdate($u, \%update);
+    aplist('updates', $u);
+    if ($arg{'historical'}) {
+        wrstatus($udir, FINISHED);
+    }
+    else {
+        wrstatus('.', INPROCESS);
+        wrstatus($udir, NEW);
+        aplog($verb,
+            'result' => OK,
+            'update' => $u,
+            'file' => $file,
+            'count' => $count,
+        );
+        aplast($verb, update => $u);
+        run_hook('added', update => $u, batch => $b);
+    }
+}
+
+sub mklist {
+    my ($dir) = @_;
+    fatal "No such directory: $dir" if ! -d $dir;
+    my @d = map { basename($_) } grep { ! -l } dirs("$dir/*");
+    aplist($dir, @d);
+    return @d;
+}
+
+sub rdlist {
+    my ($dir) = @_;
+    fatal "No such directory: $dir" if ! -d $dir;
+    my $list = "$dir.list";
+    return mklist($dir) if ! -e $list;
+    open my $fh, '<', $list or die "Can't open $list for reading: $!";
+    my @d;
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;
+        chomp;
+        s/\s+.*//;
+        push @d, $_;
+    }
+    return @d;
+}
+
+sub wrlist {
+    my $dir = shift;
+    my $list = "$dir.list";
+    open my $fh, '>', $list or die "Can't open $list for writing: $!";
+    print $fh $_, "\n" for @_;
+    close $fh;
+}
+
+sub aplist {
+    my $dir = shift;
+    my $list = "$dir.list";
+    open my $fh, '>>', $list or die "Can't open $list for writing: $!";
+    print $fh $_, "\n" for @_;
+    close $fh;
+}
+
+sub vblr {
+    my ($datefmt) = @_;
+    $datefmt = '%Y-%m-%d %H:%M:%S %z' if !defined $datefmt;
+    my $sec = (stat($0))[9];
+    my $date = strftime($datefmt, localtime $sec);
+    return {
+        'version' => $VERSION,
+        'date' => $date,
+    };
+}
+
+sub tcount {
+    my ($glob, $n) = @_;
+    my @files = files($glob);
+    return ok($glob) if @files == $n;
+    return nok($glob, 'too many') if @files > $n;
+    return nok($glob, 'too few' );
+}
+
+sub ok  { print STDERR "[\e[32;1mok\e[0m] @_\n"; return 1 }
+sub nok { print STDERR "[\e[31;1m**\e[0m] @_\n"; return 0 }
+
+sub tlink {
+    my ($ffrom, $fto) = @_;
+    return nok($ffrom) if  !-l $ffrom;
+    return  ok($ffrom) if !defined $fto;
+    return nok($ffrom, "-> $fto") if readlink($ffrom) ne $fto;
+    return  ok($ffrom, "-> $fto");
+}
+
+sub tdir {
+    my ($f) = @_;
+    return  ok($f) if -d $f;
+    return nok($f);
+}
+
+sub texec {
+    my ($f) = @_;
+    return nok($f, 'not a file') if ! -f $f;
+    return  ok($f) if -x _;
+    return nok($f);
+}
+
+sub tfile {
+    my ($f) = @_;
+    return nok($f) if ! -f $f;
+    return  ok($f);
+}
+
+sub clean_filename {
+    my ($f) = @_;
+    my $dir = dirname($f);
+    my $name = basename($f);
+    $name =~ s/^[-._]+//;
+    $name =~ tr/\x00-\x1f\x7f-\xff//d;
+    $name =~ tr/A-Za-z0-9_./-/cs;
+    return "$dir/$name";
+}
+
+sub consolidate_ranges {
+    my @r = sort cmp_ranges (@_);
+    my ($ps, $pe) = (0, 0);
+    my @etc;
+    foreach (@r) {
+        my ($s, $e) = range($_);
+        if ($s != $pe + 1) {
+            push @etc, $_;
+        }
+        else {
+            $ps ||= $s;
+            $pe = $e;
+        }
+    }
+    return ($ps, $pe, @etc);
+}
+
+sub count_update {
+    my ($u) = @_;
+    my $update = rdupdate($u);
+    my $count = $update->{'count'};
+    if (!defined $count) {
+        $count = $update->{'count'} = count(scalar files("updates/$u/*.mrc"));
+        wrkvfile("updates/$u/update.kv", $update);
+    }
+    return $count;
+}
+
+sub configure {
+    @_ = qw(prep load) if !@_;
+    foreach my $c (@_) {
+        my $write;
+        print STDERR "conf/$c.kv:";
+        my $conf = rdkvfile("conf/$c.kv");
+        foreach (values %$conf) {
+            next if !s/^\?(?=.)//;
+            my $default;
+            $default = $1 if s/ \[(.*)\]$//;
+            my $val;
+            print STDERR "\n" if !$write;
+            ask $val, $_ . ': ', $default;
+            $_ = $val;
+            $write = 1;
+        }
+        if ($write) {
+            wrkvfile("conf/$c.kv", $conf);
+        }
+        else {
+            print STDERR " no changes\n";
+        }
+    }
+}
+
+sub copy_conf {
+    my ($d1, $d2) = @_;
+    makedir("$d2/conf");
+    foreach (files("$d1/conf/*.kv")) {
+        copy($_, "$d2/conf");
+    }
+}
+
+sub copy_bin {
+    my ($d1, $d2) = @_;
+    makedir("$d2/bin");
+    foreach (files("$d1/bin/*")) {
+        copy($_, "$d2/bin");
+        chmod 0755, "$d2/bin/".basename($_) if -x $_;
+    }
+}
+
+sub load_results {
+    my ($logfile) = @_;
+    open my $fh, '-|', 'vbilog', $logfile or fatal "Can't run vbilog: $!";
+    my @results;
+    my %abbrev2action = qw(
+        add add
+        del delete
+        rep replace
+        mat match
+        dis discard
+        err error
+        unm unmatched
+        unr unresolved
+    );
+    my %abbrev2rectype = qw( A auth B bib M mfhd );
+    my $num = 0;
+    my $head = 0;
+    while (<$fh>) {
+        chomp;
+        if (/^(\d+)$/) {
+            $num = $1;
+            $head = 1;
+        }
+        elsif (s/^([A-Z]) (\w+)\s*//) {
+            my $rectype = $abbrev2rectype{$1} || $1;
+            my $action  = $abbrev2action{$2}  || $2;
+            next if $rectype eq 'M';
+            my @records = split / /;
+            push @results, {
+                'number'  => $num,
+                'type'    => $rectype,
+                'head'    => $head,
+                'action'  => $action,
+                'records' => \@records,
+            };
+            $head = 0;
+        }
+    }
+    close $fh;
+    return @results;
+}
+
+sub old_load_results {
+    my ($log) = @_;
+    open my $fh, '<', $log or die "Can't open log file $log: $!";
+    my @out;
+    my ($r, $m);      # Record, MFHD aux info
+    my ($n, $g, $t);  # Record number, group number, record type
+    my $pg = -1;      # Previous group number
+    while (<$fh>) {
+        if (s/^(\d+)\((\d+)\)://) {
+            ($n, $g) = ($1, $2);
+            if ($g != $pg) {
+                if ($r) {
+                    $r->{'action'} ||= ADD;
+                    if ($r->{'action'} eq HALFDEL && @{$r->{'mfhds'}} == 1 && $r->{'mfhds'}[-1]{'action'} eq 'add') {
+                        $r->{'mfhds'}[-1]{'action'} = REPLACE;
+                    }
+                    push @out, $r;
+                }
+                $r = {};
+            }
+            if (s/^Duplicate (Auths|Bibs|Mfhds) above threshold:\s*//i) {
+                $t = $abbrev2rectype{substr($1, 0, 1)};
+                if ($t eq MFHD) {
+                    $m = {};
+                    push @{ $r->{'mfhds'} ||= [] }, $m;
+                }
+                #if (/replace (\d+), warning (\d+)/) {
+                #    ($r, $w) = ($1, $2);
+                #}
+            }
+            $pg = $g;
+        }
+        elsif (s/^\s*Adding (Auth|Bib|Mfhd) record (\d+)//i) {
+            $t = $abbrev2rectype{substr($1, 0, 1)};
+            my $e = $t eq MFHD ? $m : $r;
+            @$e{qw(group record type id action)} = ($g, $n, $t, $2, ADD);
+            if (/^ to Bib record (\d+)/i) {
+                $r->{'action'} ||= MATCH;
+                $r->{'id'} = $1;
+                # $m->{'bib'} = $1;
+            }
+        }
+        elsif (/^\s*(Auth|Bib|Mfhd)ID & rank/i) {
+            $t = $abbrev2rectype{substr($1, 0, 1)};
+        }
+        elsif (/^\s*MFHD (\d+) deleted/i) {
+            $m->{'action'} = DELETE;
+            if (!defined $r->{'action'}) {
+                $r->{'action'} = HALFDEL;
+            }
+        }
+        elsif (/^\s*Could not delete Mfhd (\d+)/i) {
+            $m->{'action'} = $r->{'action'} = 'error';
+        }
+        elsif (/^\s*Bib (\d+) deleted/i) {
+            $r->{'action'} = DELETE;
+        }
+        elsif (/Record (\d+) discarded - no matching records/i) {
+            $r->{'action'} = DISCARD;
+        }
+        elsif (/^\s*DISCARD Cannot resolve/i) {
+            $r->{'action'} = DISCARD;
+        }
+        elsif (/^\s+(\d+) - (\d+)/) {
+            $r->{'matches'}{$1} = $2;
+        }
+    }
+    push @out, $r if $r && keys %$r;
+    return @out;
+}
+
+sub find {
+    my $f = shift;
+    my @files = files(map { "$_/$f" } @_);
+    return shift @files;
+}
+
+sub mkjob {
+    my ($u, $b, $j) = @_;
+    my $bdir = "updates/$u/batches/$b";
+    makedir("$bdir/jobs");
+    my $jdir = "$bdir/jobs/$j";
+    rename "$bdir/\@prepared", $jdir;
+    makedir("$jdir/output");
+    aplist("$bdir/jobs", $j);
+    return $jdir;
+}
+
+sub pcode {
+    my ($p) = @_;
+    my $code = $p->{'code'};
+    fatal "Project has no code" if !defined $code;
+    return $code;
+}
+
+sub ucode {
+    my ($u) = @_;
+    my $code = $u->{'code'};
+    fatal "Update has no code" if !defined $code;
+    return $code;
+}
+
+sub bcode {
+    my ($b) = @_;
+    my $code = $b->{'code'};
+    fatal "Batch has no code" if !defined $code;
+    return $code;
+}
+
+sub jcode {
+    my ($j) = @_;
+    my $code = $j->{'code'};
+    fatal "Job has no code" if !defined $code;
+    return $code;
+}
+
+sub options {
+    my %std = qw(
+        p project=s
+        u update=s
+        b batch=s
+        j job=s
+        v verbose
+        n dry-run
+        m description=s
+
+        a all
+        f file=s
+        g auto-generate
+        i link-001
+        l loaded
+        l long
+        o output=s
+        r root=s
+        s status=s
+        t title=s
+        z gzip
+    );
+
+    my %extra = qw(
+        C copy
+        L not-loaded
+        P proto=s
+        S stylesheet=s
+        Y yaml
+    );
+    my %group = (
+        ':std' => \%std,
+        ':extra' => \%extra,
+    );
+    my %all = ( %std, %extra );
+    my @include;
+    while (@_) {
+        local $_ = shift @_;
+        if (/^:(?:std|extra)$/) {
+            push @include, %{ $group{$_} };
+        }
+        elsif (/^.$/) {
+            push @include, $_, $all{$_};
+        }
+        elsif (/^-(.)$/) {
+            @_ or usage;
+            push @include, $_, shift(@_);
+        }
+        else {
+            usage;
+        }
+    };
+}
+
+sub makemail {
+    my %conf = @_;
+    my $tmpl = $conf{'template'};
+    my @attach = @{ $conf{'attachments'} || [] };
+    my $code = $conf{'code'};
+    my ($header, @header, @body);
+    if (defined $tmpl) {
+        open my $fh, '<', $tmpl or die "Can't open notification template $tmpl: $!";
+        {
+            local $/ = '';
+            $header = <$fh>;
+            chomp $header;
+        }
+        @body = expand(undef, \%conf, <$fh>);
+        close $fh;
+    }
+    else {
+        $header = <<'EOS';
+From: %(from)
+Sender: %(sender)
+Reply-To: %(reply-to)
+To: %(to)
+Subject: %(subject)
+Cc: %(cc)
+Bcc: %(bcc)
+EOS
+    }
+    @header = grep { !/^[^\s:]*:\s*$/ } expand(undef, \%conf, split /\n/, $header);
+    @body = () if ! grep length, @body;
+    if (defined $conf{'body'}) {
+        open my $fh, '<', $conf{'body'} or die "Can't open body file $conf{'body'}: $!";
+        push @body, <$fh>;
+    }
+    if (@attach) {
+        my $boundary = randhex();
+        push @header, 'MIME-Version: 1.0' if !grep { /^MIME-Version:/ } @header;
+        push @header, "Content-Type: multipart/mixed; boundary=$boundary";
+        unshift @body,
+            'This is a MIME message.',
+            '',
+            "--$boundary",
+            "Content-Type: text/plain; charset=utf-8",
+            '';
+        foreach my $file (@attach) {
+            my $ctype = filetype($file);
+            # XXX Hack! file(1) reports the wrong MIME type
+            $ctype = 'application/vnd.ms-excel'
+                if $ctype eq 'application/msword' && $file =~ /\.xls$/;
+            my $name = basename(clean_filename($file));
+            push @body, (
+                qq{--$boundary},
+                qq{Content-Type: $ctype},
+                qq{Content-Disposition: attachment; filename=\"$name\"},
+            );
+            open my $fhatt, '<', $file or die "Can't open attachment $file: $!";
+            if ($ctype =~ m{^text/}) {
+                push @body, '', <$fhatt>;
+            }
+            else {
+                push @body, 'Content-Transfer-Encoding: base64', '';
+                my $buf;
+                while (read($fhatt, $buf, 60*57)) {
+                    push @body, encode_base64($buf);
+                }
+            }
+            close $fhatt;
+        }
+        push @body, qq{--$boundary--};
+    }
+    push @header, '';
+    foreach (@header, @body) {
+        chomp;
+        $_ .= "\n";
+        $code->();
+    }
+}
+
+sub filetype {
+    my ($f) = @_;
+    open my $fh, '-|', qw(file -b -i -L), $f or die "Can't run file: $!";
+    my $info = <$fh>;
+    chomp $info;
+    return $info;
+}
+
+sub expand {
+    my ($rx, $var, @parts) = @_;
+    $rx ||= qr/\%\(([^\s()]+)\)/;
+    $rx = qr/$rx/ if !ref $rx;
+    # Expand %(foo) --> $var->{foo}
+    s/$rx/
+        my $val = $var->{$1};
+        !defined $val
+            ? ''
+            : ref($val) eq 'ARRAY'
+                ? join(', ', @{ $val })
+                :  $val
+    /eg for @parts;
+    return @parts;
+}
+
