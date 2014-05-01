@@ -37,6 +37,12 @@ use constant MFHD => 'mfhd';
 use constant BIBMFHD => 'bib+mfhd';
 
 my %abbrev2rectype = (A => AUTHORITY, B => BIB, M => MFHD);
+my %rectype2human  = (
+    AUTHORITY() => 'authority record(s)',
+    BIB() => 'bib record(s)',
+    MFHD() => 'MFHD(s)',
+    BIBMFHD() => 'bib record(s) with holdings',
+);
 
 # Record encodings
 use constant MARC8 => 'marc8';
@@ -600,46 +606,52 @@ sub cmd_finish {
             }
             else {
                 # Update completed -- send notification
-                my %x2h = (
-                    'bib add'        => 'new bib(s) created',
-                    'bib delete'     => 'existing bib(s) deleted',
-                    'bib discard'    => 'bib(s) discarded',
-                    'bib error'      => 'bib(s) with errors',
-                    'bib match'      => 'existing bib(s) matched',
-                    'bib replace'    => 'existing bib(s) replaced',
-                    'bib unresolved' => 'record(s) with multiple matches dropped',
-                    'bib unmatched'  => 'record(s) with no matches dropped',
-                    'mfhd add'       => 'new MFHD(s) created',
-                    'mfhd delete'    => 'existing MFHD(s) deleted',
-                    'mfhd error'     => 'MFHD(s) with errors',
-                    'mfhd replace'   => 'MFHD(s) replaced',
-                );
                 my $udir = "updates/$u";
                 wrstatus($udir, FINISHED);
-                my ($cfile) = find('conf/notice.kv', $udir, '.', $root);
+                my ($cfile) = find('conf/notice.kv',  $udir, '.', $root);
+                my ($tfile) = find('conf/notice.msg', $udir, '.', $root);
                 if (defined $cfile) {
                     my %conf = %{ rdkvfile($cfile) };
-                    my $update = rdupdate($u);
                     my $group = rdkvfile("$root/groups/$gcur/group.kv");
-                    my $www = rdkvfile("$root/conf/www.kv");
-                    my $urlbase = $www->{'url-base'};
-                    my %summary = update_summary($u);
-                    my @summary = map {
-                        my $h = $x2h{$_};
-                        my $n = $summary{$_};
-                        if (!$n)       { () }
-                        elsif ($n > 1) { $h =~ s/\(s\)/s/; [$n, $h] }
-                        else           { $h =~ s/\(s\)//;  [$n, $h] }
-                    } sort keys %x2h;
-                    my $summary = join("\n", map { sprintf '%6d %s', @$_ } @summary);
+                    my $update = rdupdate($u);
+                    $project->{'url'} ||= sub {
+                        my $www = rdkvfile("$root/conf/www.kv");
+                        my $urlbase = $www->{'url-base'};
+                        sprintf('%s/%s/', $urlbase, $project->{'code'});
+                    };
+                    $update->{'summary'} = sub {
+                        my %x2h = (
+                            'bib add'        => 'new bib(s) created',
+                            'bib delete'     => 'existing bib(s) deleted',
+                            'bib discard'    => 'bib(s) discarded',
+                            'bib error'      => 'bib(s) with errors',
+                            'bib match'      => 'existing bib(s) matched',
+                            'bib replace'    => 'existing bib(s) replaced',
+                            'bib unresolved' => 'record(s) with multiple matches dropped',
+                            'bib unmatched'  => 'record(s) with no matches dropped',
+                            'mfhd add'       => 'new MFHD(s) created',
+                            'mfhd delete'    => 'existing MFHD(s) deleted',
+                            'mfhd error'     => 'MFHD(s) with errors',
+                            'mfhd replace'   => 'MFHD(s) replaced',
+                        );
+                        my %summary = update_summary($u);
+                        my @summary = map {
+                            my $h = $x2h{$_};
+                            my $n = $summary{$_};
+                            !$n ? () : ([$n, number($n, $h)])
+                        } sort keys %x2h;
+                        return join("\n", map { sprintf '%6d %s', @$_ } @summary);
+                    };
+                    $update->{'rectype'} = sub {
+                        my $t = $rectype2human{$update->{'marc-type'}};
+                        return number($update->{'count'}, $t);
+                    };
                     notify({
+                        'template' => $tfile,
                         %conf,
-                        'gdesc' => $group->{'shortname'},
-                        'pdesc' => $project->{'description'},
-                        'pcode' => $project->{'code'},
-                        'udesc' => $update->{'description'},
-                        'summary' => $summary,
-                        'urlbase' => $urlbase,
+                        'project' => $project,
+                        'group'   => $group,
+                        'update'  => $update,
                     });
                 }
             }
@@ -3222,7 +3234,40 @@ sub filetype {
     return $info;
 }
 
+sub keyval {
+    my ($var, $key) = @_;
+    my $val;
+    foreach (split /(?=\.)|(?=\[)/, $key) {
+        if (/^\[(\d+)\]$/) {
+            return '' if ref($val) ne 'ARRAY' || @$val <= $1;
+            $val = $val->[$1];
+        }
+        elsif (/^\.(.+)/) {
+            return '' if ref($val) ne 'HASH';
+            $val = $val->{$1};
+        }
+        else {
+            $val = $var->{$_};
+        }
+        return '' if !defined $val;
+        if (ref($val) eq 'CODE') {
+            $val = $val->();
+            return '' if !defined $val;
+        }
+    }
+    return ref($val) eq 'ARRAY' ? join(', ', @$val) : $val;
+}
+
 sub expand {
+    my ($rx, $var, @parts) = @_;
+    $rx ||= qr/\%\(([^\s()]+)\)/;
+    $rx = qr/$rx/ if !ref $rx;
+    # Expand %(foo) --> $var->{foo}
+    s/$rx/keyval($var, $1)/eg for @parts;
+    return @parts;
+}
+
+sub old_expand {
     my ($rx, $var, @parts) = @_;
     $rx ||= qr/\%\(([^\s()]+)\)/;
     $rx = qr/$rx/ if !ref $rx;
@@ -3238,3 +3283,19 @@ sub expand {
     return @parts;
 }
 
+sub number {
+    my ($n, $str) = @_;
+    $str =~ s{
+        \(
+            (?:
+                (s)
+                |
+                (?: (.+) \| (.+) )
+            )
+        \)
+    }{
+        defined $2 ? ($n == 1 ? $2 : $3 )
+                   : ($n == 1 ? '' : 's')
+    }egx;
+    return $str;
+}
