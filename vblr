@@ -131,6 +131,7 @@ sub askbool($);
 
 my $root = $ENV{'VBLR_ROOT'} || "$ENV{HOME}/proj";
 my $pdir;  # Path to the current project (e.g., ~/proj/ecl/afso)
+my $gcur;  # Name of the current group (i.e., institution)
 my $pcur;  # Name of the current project (e.g., ecl/afso)
 my $ucur;  # Name of the current update (if we're within an update dir)
 my $bcur;  # Name of the current batch (if yadda yadda)
@@ -598,8 +599,49 @@ sub cmd_finish {
                 $log{'batch'} = $b;
             }
             else {
-                # XXX Update completed -- send notification
-                wrstatus("updates/$u", FINISHED);
+                # Update completed -- send notification
+                my %x2h = (
+                    'bib add'        => 'new bib(s) created',
+                    'bib delete'     => 'existing bib(s) deleted',
+                    'bib discard'    => 'bib(s) discarded',
+                    'bib error'      => 'bib(s) with errors',
+                    'bib match'      => 'existing bib(s) matched',
+                    'bib replace'    => 'existing bib(s) replaced',
+                    'bib unresolved' => 'record(s) with multiple matches dropped',
+                    'bib unmatched'  => 'record(s) with no matches dropped',
+                    'mfhd add'       => 'new MFHD(s) created',
+                    'mfhd delete'    => 'existing MFHD(s) deleted',
+                    'mfhd error'     => 'MFHD(s) with errors',
+                    'mfhd replace'   => 'MFHD(s) replaced',
+                );
+                my $udir = "updates/$u";
+                wrstatus($udir, FINISHED);
+                my ($cfile) = find('conf/notice.kv', $udir, '.', $root);
+                if (defined $cfile) {
+                    my %conf = %{ rdkvfile($cfile) };
+                    my $update = rdupdate($u);
+                    my $group = rdkvfile("$root/groups/$gcur/group.kv");
+                    my $www = rdkvfile("$root/conf/www.kv");
+                    my $urlbase = $www->{'url-base'};
+                    my %summary = update_summary($u);
+                    my @summary = map {
+                        my $h = $x2h{$_};
+                        my $n = $summary{$_};
+                        if (!$n)       { () }
+                        elsif ($n > 1) { $h =~ s/\(s\)/s/; [$n, $h] }
+                        else           { $h =~ s/\(s\)//;  [$n, $h] }
+                    } sort keys %x2h;
+                    my $summary = join("\n", map { sprintf '%6d %s', @$_ } @summary);
+                    notify({
+                        %conf,
+                        'gdesc' => $group->{'shortname'},
+                        'pdesc' => $project->{'description'},
+                        'pcode' => $project->{'code'},
+                        'udesc' => $update->{'description'},
+                        'summary' => $summary,
+                        'urlbase' => $urlbase,
+                    });
+                }
             }
         }
         else {
@@ -1794,6 +1836,53 @@ sub throw {
     die($exc."\n");
 }
 
+sub notify {
+    my ($arg, @attach) = @_;
+    $arg->{'to'}  = join(', ', @{$arg->{'to'} } ) if ref $arg->{'to'};
+    $arg->{'cc'}  = join(', ', @{$arg->{'cc'} } ) if ref $arg->{'cc'};
+    $arg->{'bcc'} = join(', ', @{$arg->{'bcc'}} ) if ref $arg->{'bcc'};
+    my @sendmail;
+    if (defined $arg->{'sendmail'}) {
+        @sendmail = split /\s+/, $arg->{'sendmail'};
+    }
+    else {
+        my ($sendmail) = grep { -x $_ } map { "$_/sendmail" } split /:/, $ENV{'PATH'};
+        fatal "sendmail can't be determined; must specify in config" if !defined $sendmail;
+        @sendmail = ($sendmail, qw(-oi -t));
+    }
+    my $fh;
+    if ($arg->{'dryrun'}) {
+        $fh = \*STDERR;
+    }
+    else {
+        open $fh, '|-', @sendmail or die "Can't run sendmail: $!";
+    }
+    makemail(
+        %$arg,
+        'attachments' => [ @attach ],
+        'code' => sub { print $fh $_ },
+    );
+}
+
+sub update_summary {
+    my ($u) = @_;
+    my ($b, $j, @jobs);
+    my $update = rdupdate($u);
+    foreach my $b (batches($u)) {
+        push @jobs, map { [ $u, $b, $_ ] } jobs($u, $b);
+    }
+    my %num;
+    foreach (@jobs) {
+        ($u, $b, $j) = @$_;
+        my $udir = "updates/$u";
+        my $bdir = "$udir/batches/$b";
+        my $log = files("$bdir/jobs/$j/output/*.log");
+        my @results = load_results($log);
+        $num{"$_->{'type'} $_->{'action'}"}++ for @results;
+    }
+    return %num;
+}
+
 sub run_hook {
     my ($hook, %arg) = @_;
     my @where = ($pdir);
@@ -2063,10 +2152,12 @@ sub orient {
         $pdir = getcwd;
     }
     if ($pdir =~ m{^$root/groups/([^/]+)/projects/([^/]+)$}) {
+        $gcur = $1;
         $pcur = "$1/$2";
     }
-    elsif ($pdir =~ m{^$root/([^/]+/[^/]+)$}) {
-        $pcur = $1;
+    elsif ($pdir =~ m{^$root/([^/]+)/([^/]+)$}) {
+        $gcur = $1;
+        $pcur = "$1/$2";
     }
     else {
         fatal "I don't know what to do when a project is not within $root";
@@ -2090,6 +2181,7 @@ sub orient {
         wrproject($project);
         symlink getcwd, "$root/id/$id";
     }
+    $project->{'group'} = $gcur if !$project->{'group'};
     if (! -e 'vblr.kv') {
         warning "No vblr.kv, consider adding one" if $cmd ne 'init';
     }
@@ -3051,6 +3143,7 @@ sub makemail {
     my $code = $conf{'code'};
     my ($header, @header, @body);
     if (defined $tmpl) {
+        $tmpl = files($tmpl) if ! -e $tmpl;
         open my $fh, '<', $tmpl or die "Can't open notification template $tmpl: $!";
         {
             local $/ = '';
