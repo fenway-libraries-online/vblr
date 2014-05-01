@@ -608,8 +608,8 @@ sub cmd_finish {
                 # Update completed -- send notification
                 my $udir = "updates/$u";
                 wrstatus($udir, FINISHED);
-                my ($cfile) = find('conf/notice.kv',  $udir, '.', $root);
-                my ($tfile) = find('conf/notice.msg', $udir, '.', $root);
+                my ($cfile) = find('conf/notify.kv',  $udir, '.', $root);
+                my ($tfile) = find('conf/notify.msg', $udir, '.', $root);
                 if (defined $cfile) {
                     my %conf = %{ rdkvfile($cfile) };
                     my $group = rdkvfile("$root/groups/$gcur/group.kv");
