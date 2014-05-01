@@ -619,6 +619,13 @@ sub cmd_finish {
                         my $urlbase = $www->{'url-base'};
                         sprintf('%s/%s/', $urlbase, $project->{'code'});
                     };
+                    $project->{'total'} ||= sub {
+                        my $f = find('bin/count', '.');
+                        return '' if !defined $f;
+                        my $n = qx($f);
+                        chomp $n;
+                        commify($n);
+                    };
                     $update->{'summary'} = sub {
                         my %x2h = (
                             'bib add'        => 'new bib(s) created',
@@ -3272,4 +3279,14 @@ sub number {
                    : ($n == 1 ? '' : 's')
     }egx;
     return $str;
+}
+
+sub commify {
+    my ($sign, $int, $frac) = ($_[0] =~ /^([+-]?)(\d*)(.*)/);
+    my $commified = (
+        scalar reverse join ',',
+        unpack '(A3)*',
+        scalar reverse $int
+    );
+    return $sign . $commified . $frac;
 }
