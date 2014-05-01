@@ -1773,12 +1773,9 @@ sub cmd_project {
 }
 
 sub cmd_notify {
-    #@ notify [-d CONFDIR] [-vn] [-D key=val]... [-H HDRFILE]
-    my ($verbose, $dry_run);
+    #@ notify [-d CONFDIR] [-vn] [-D key=val]... [-TB FILE] [-ftcb ADDR] [-s SUBJ]
+    my ($verbose, $dry_run, @to, @cc, @bcc, %conf, %var);
     my $confdir = 'conf';
-    my ($tmpl, $body, $from, $subj, @to, @cc, @bcc);
-    my @sendmail;
-    my (%conf, %var);
     GetOptions(
         'v|verbose' => \$verbose,
         'n|dry-run' => \$dry_run,
@@ -1788,42 +1785,19 @@ sub cmd_notify {
             usage if !defined $val;
             $var{$key} = $val;
         },
-        'T|template=s' => \$tmpl,
-        'B|body=s'     => \$body,
-        'f|from=s'     => \$from,
-        's|subject=s'  => \$subj,
+        'T|template=s' => sub { $conf{'template'} = $_[1] },
+        'B|body=s'     => sub { $conf{'body'}     = $_[1] },
+        'f|from=s'     => sub { $conf{'from'}     = $_[1] },
+        's|subject=s'  => sub { $conf{'subject'}  = $_[1] },
         't|to=s'       => \@to,
         'c|cc=s'       => \@cc,
         'b|bcc=s'      => \@bcc,
     ) or usage;
     %conf = ( %{ rdkvfile("$confdir/notify.kv") }, %var );
-    $conf{'template'} = $tmpl if defined $tmpl;
-    $conf{'body'}     = $body if defined $body;
-    $conf{'from'}     = $from if defined $from;
-    $conf{'subject'}  = $subj if defined $subj;
     $conf{'to'}  = join(', ', @to ) if @to;
     $conf{'cc'}  = join(', ', @cc ) if @cc;
     $conf{'bcc'} = join(', ', @bcc) if @bcc;
-    if (defined $conf{'sendmail'}) {
-        @sendmail = split /\s+/, $conf{'sendmail'};
-    }
-    else {
-        my ($sendmail) = grep { -x $_ } map { "$_/sendmail" } split /:/, $ENV{'PATH'};
-        fatal "sendmail can't be determined; must specify in config" if !defined $sendmail;
-        @sendmail = ($sendmail, qw(-oi -t));
-    }
-    my $fh;
-    if ($dry_run) {
-        $fh = \*STDERR;
-    }
-    else {
-        open $fh, '|-', @sendmail or die "Can't run sendmail: $!";
-    }
-    makemail(
-        %conf,
-        'attachments' => [ @ARGV ],
-        'code' => sub { print $fh $_ },
-    );
+    notify(\%conf, @ARGV);
 }
 
 # --- Other functions
