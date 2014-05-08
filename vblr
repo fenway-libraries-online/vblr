@@ -1869,7 +1869,8 @@ sub update_summary {
         ($u, $b, $j) = @$_;
         my $udir = "updates/$u";
         my $bdir = "$udir/batches/$b";
-        my $log = files("$bdir/jobs/$j/output/*.log");
+        my ($log) = files("$bdir/jobs/$j/output/*.log");
+        next if !defined $log;  # Failed job
         my @results = load_results($log);
         $num{"$_->{'type'} $_->{'action'}"}++ for @results;
     }
@@ -3243,25 +3244,27 @@ sub expand {
     my ($rx, $var, @parts) = @_;
     $rx ||= qr/\%\(([^\s()]+)\)/;
     $rx = qr/$rx/ if !ref $rx;
-    # Expand %(foo) --> $var->{foo}
-    s/$rx/keyval($var, $1)/eg for @parts;
-    return @parts;
-}
-
-sub old_expand {
-    my ($rx, $var, @parts) = @_;
-    $rx ||= qr/\%\(([^\s()]+)\)/;
-    $rx = qr/$rx/ if !ref $rx;
-    # Expand %(foo) --> $var->{foo}
-    s/$rx/
-        my $val = $var->{$1};
-        !defined $val
-            ? ''
-            : ref($val) eq 'ARRAY'
-                ? join(', ', @{ $val })
-                :  $val
-    /eg for @parts;
-    return @parts;
+    my ($cond, @out);
+    while (@parts) {
+        local $_ = shift @parts;
+        if (/^%\?\s*(\S+)\s*\{$/) {
+            !defined $cond or die;
+            my $val = keyval($var, $1);
+            $cond = defined($val) && length($val);
+        }
+        elsif (/^%\}$/) {
+            defined $cond or die;
+            undef $cond;
+        }
+        elsif (defined $cond && $cond eq '') {
+            next;
+        }
+        else {
+            s/$rx/keyval($var, $1)/eg;
+            push @out, $_;
+        }
+    }
+    return @out;
 }
 
 sub number {
