@@ -479,7 +479,7 @@ sub cmd_export {
     $project->{'updates'} = [ map {
         my $u = $_;
         my $update = rdupdate($u);
-        $update->{'status'} = $u2status{$u};
+        my $ustat = $update->{'status'} = $u2status{$u};
         $update->{'code'} = $u;
         $update->{'file'} = basename($update->{'source'});
         $update->{'date'} = $update->{'created'} if !defined $update->{'date'};
@@ -494,7 +494,9 @@ sub cmd_export {
             my @j = jobs($u, $b);
             my $bstat = $batch->{'status'} = $b2status{$b};
             my $n = $batch->{'count'} ||= $batch->{'end'} - $batch->{'begin'} + 1;
-            $ucount += $n if $bstat ne FINISHED && $bstat ne LOADED;
+            if ($ustat ne FINISHED) {
+                $ucount += $n if $bstat ne FINISHED && $bstat ne LOADED;
+            }
             $batch->{'jobs'} = [ map {
                 my $j = $_;
                 my $jstat = rdstatus("updates/$u/batches/$b/jobs/$j");
@@ -512,7 +514,7 @@ sub cmd_export {
             } @j ];
             $batch;
         } @b ];
-        if ($ucount == 0) {
+        if ($ucount == 0 && $ustat ne FINISHED) {
             $ucount = $update->{'count'};
         }
         $unloaded += $ucount;
