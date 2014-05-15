@@ -791,7 +791,10 @@ sub cmd_divide {
     my @b = batches($u);
     my $count = count_update($u);
     my ($rs, $re) = (1, $count);  # Records remaining to be divided
-    if (@b) {
+    if ($force) {
+        @b = ();
+    }
+    elsif (@b) {
         my ($s, $e, @etc) = consolidate_ranges(@b);
         fatal "Can't divide if there are gaps" if $s != 1 || @etc;
         fatal "Update $u is already fully divided" if $s == 1 && $e == $count;
@@ -804,14 +807,14 @@ sub cmd_divide {
         do {
             my $b = shift @ARGV;
             if ($b =~ /^(\d+)-(\d+)$/) {
-                usage if $1 != $rs;
+                usage if $1 != $rs && !$force;
                 usage if $2 < $1;
                 usage if $2 > $count;
                 $rs = $2 + 1;
                 push @b, $b;
             }
             elsif ($b =~ /^(\d+)-n?$/) {
-                usage if $1 != $rs;
+                usage if $1 != $rs && !$force;
                 usage if @ARGV;
                 push @b, "$1-$count";
                 $rs = $count + 1;
@@ -2698,7 +2701,7 @@ sub add {
         -d 'updates/BASE' || fatal "You must add the project base first";
     }
     makedir('updates', $udir);
-    makedir ("$udir/batches") if !$arg{'historical'};
+    makedir("$udir/batches") if !$arg{'historical'};
     # Ingest the file of MARC records
     $file = File::Spec->rel2abs($file);
     my $filename = basename(clean_filename($file));
