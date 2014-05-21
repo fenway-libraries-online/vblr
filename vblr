@@ -338,11 +338,12 @@ sub cmd_note {
 
 sub cmd_conf {
     #@ conf :: Show configuration settings
-    my $verbose;
+    my ($verbose, $no_warnings);
     my $confdir = 'conf';
     GetOptions(
         'd|conf-dir=s' => \$confdir,
         'v|verbose' => \$verbose,
+        'W|no-warnings' => \$no_warnings,
     ) or usage;
     @ARGV = map { my $f = basename($_); $f =~ s/\.kv$//; $f } files("$confdir/*.kv") if !@ARGV;
     foreach my $what (@ARGV) {
@@ -350,7 +351,10 @@ sub cmd_conf {
             my ($f, $k) = ($1, $2);
             my $kv = rdkvfile("$confdir/$f.kv");
             my $v = $kv->{$k};
-            fatal "Undefined: $what" if !defined $v;
+            if (!defined $v) {
+                next if $no_warnings;
+                fatal "Undefined: $what";
+            }
             if ($verbose) {
                 print "$what $v\n";
             }
