@@ -1323,17 +1323,19 @@ sub cmd_ls {
     }
 }
 sub cmd_match {
-    #@ match [UPDATE] [BATCH] :: Predict matching
-    my $verbose;
+    #@ match [ -j JOB | [UPDATE [BATCH]] ] :: Predict matching
+    my ($verbose, $u, $b, $j);
     GetOptions(
         'v|verbose' => \$verbose,
+        'j|job=s' => \$j,
     ) or usage;
-    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
     usage if !defined $u || !defined $b;
     my $udir = "updates/$u";
     my $bdir = "$udir/batches/$b";
     my @files = glob("$bdir/*/records.mrc");
-    @files = glob("$bdir/jobs/*/records.mrc") if !@files;
+    @files = glob("$bdir/jobs/$j/records.mrc") if defined $j;
+    @files = glob("$bdir/jobs/*/records.mrc") if !@files && !defined $j;
     fatal "No records to match" if !@files;
     fatal "Huh?" if @files > 1;
     my $update  = rdupdate($u);
