@@ -18,8 +18,6 @@ use POSIX qw(strftime);
 use MIME::Base64;
 use YAML;
 use IO::Handle;
-use Net::FTP;
-use Net::Netrc;
 use Text::Glob qw(glob_to_regex);
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
@@ -1827,56 +1825,6 @@ sub cmd_notify {
     $conf{'cc'}  = join(', ', @cc ) if @cc;
     $conf{'bcc'} = join(', ', @bcc) if @bcc;
     notify(\%conf, @ARGV);
-}
-
-sub cmd_download {
-    #@ download [-vn] [-d CONFDIR] [-s SUBDIR] [-L LOGFILE]
-    my ($verbose, $dry_run, @subdirs);
-    my ($dest_root, $confdir, $logfile) = qw(inbox conf downloaded.log);
-    GetOptions(
-        'v|verbose' => \$verbose,
-        'n|dry-run' => \$dry_run,
-        'd|conf-dir=s' => \$confdir,
-        's|subdirectory=s' => \@subdirs,
-        'L|log-file=s' => \$logfile,
-    ) or usage;
-    my %conf = ( %{ rdkvfile("$confdir/ftp.kv") } );
-    my ($host, $user, $pass, $ftp_root, $pattern) = @conf{qw(host user password root pattern)};
-    @subdirs = ('.') if !@subdirs;
-    my $ftp = Net::FTP->new($host) or fatal "Can't connect to $host: $@";
-    if (!defined $user || !defined $pass) {
-        my $mach = Net::Netrc->lookup($host);
-        ($user, $pass) = $mach->lpa;
-    }
-    $ftp->login($user, $pass) or die "Can't login: $@";
-    my %have;
-    open my $fh, '<', $logfile or die;
-    while (<$fh>) {
-        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
-        chomp;
-        $have{$_} = 1;
-    }
-    close $fh;
-    undef $fh;
-    my $rx = defined $pattern ? glob_to_regex($pattern) : qr/./;
-    foreach my $subdir (@subdirs) {
-        my $dest = $subdir eq '.' ? $dest_root : $dest_root . '/' . $subdir;
-        my $path = $subdir eq '.' ? $ftp_root  : $ftp_root  . '/' . $subdir;
-        foreach my $f ($ftp->ls($path)) {
-            next if $have{$f};
-            my $name = basename($f);
-            next if $name !~ $rx;
-            if ($dry_run) {
-                print STDERR $f, "\n";
-                next;
-            }
-            $ftp->get($f, $dest.'/'.$name) or fatal "Failed to download $f: $@";
-            open $fh, '>>', $logfile or die if !defined $fh;
-            $fh->autoflush(1);
-            print $fh $f, "\n";
-            print STDERR $f, "\n" if $verbose;
-        }
-    }
 }
 
 # --- Other functions
