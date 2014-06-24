@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(0.3.029);
+$VERSION = q(0.3.041);
 
 use IO::Compress::Gzip qw(gzip $GzipError) ;
 use Digest::SHA1  qw(sha1_hex);
@@ -273,9 +273,11 @@ sub cmd_base {
 
 sub cmd_add {
     #@ add [-CRix] [-p PROTO] [-m DESCRIP] FILE [NAME] :: Add a MARC file to the project
-    my ($descrip, $proto, $copy, $historical, $redo);
+    my ($kit, $autoload, $descrip, $proto, $copy, $historical, $redo);
     my $type = ADD;
     GetOptions(
+        'k|kit=s' => \$kit,
+        'L|auto-load' => \$autoload,
         'x|delete' => sub { $type = DELETE },
         'C|copy' => \$copy,
         'm|description=s' => \$descrip,
@@ -283,20 +285,25 @@ sub cmd_add {
         'i|historical' => \$historical,
         'R|redo' => \$redo,
     ) or usage;
-    usage if @ARGV > 2 || @ARGV < 1;
-    my ($file, $u) = @ARGV;
-    ask $u,       'Update code: ', strftime("%Y-%m", localtime) if !defined $u;
-    ask $descrip, 'Description: ' if !defined $descrip;
-    add(
-        'type' => $type,
-        'update' => $u,
-        'file' => $file,
-        'description' => $descrip,
-        'copy' => $copy,
-        'prototype' => $proto,
-        'historical' => $historical,
-        'redo' => $redo,
-    );
+    if ($kit) {
+        my @conf = rdkvfile("conf/add.kv");
+    }
+    else {
+        usage if @ARGV > 2 || @ARGV < 1;
+        my ($file, $u) = @ARGV;
+        ask $u,       'Update code: ', strftime("%Y-%m", localtime) if !defined $u;
+        ask $descrip, 'Description: ' if !defined $descrip;
+        add(
+            'type' => $type,
+            'update' => $u,
+            'file' => $file,
+            'description' => $descrip,
+            'copy' => $copy,
+            'prototype' => $proto,
+            'historical' => $historical,
+            'redo' => $redo,
+        );
+    }
 }
 
 sub cmd_note {
