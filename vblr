@@ -7,6 +7,7 @@ use vars qw($VERSION);
 
 $VERSION = q(0.3.041);
 
+use File::Kvpar;
 use IO::Compress::Gzip qw(gzip $GzipError) ;
 use Digest::SHA1  qw(sha1_hex);
 use Cwd qw(getcwd);
@@ -2209,38 +2210,6 @@ sub check_version_compatibility {
     # XXX
 }
 
-# sub add_update {
-#     my ($u, $file, $descrip, $copy) = @_;
-#     $u !~ /\s/ or fatal "Update names mustn't contain spaces";
-#     $u !~ m{/:} or fatal "Update names mustn't contain / or :";
-#     $file = File::Spec->rel2abs($file);
-#     my $copier = $copy ? \&copy : \&move;
-#     my $udir = "updates/$u";
-#     -d 'updates/BASE' || fatal "You must add the project base first";
-#     ! -d $udir || fatal "Update $u has already been added";
-#     print STDERR "Checking file $file...\n";
-#     my %marc = marc($file);
-#     print STDERR OK, "\n";
-#     my $count = $marc{'count'};
-#     my $b = $project->{'count'} + 1;
-#     my $e   = $b + $count - 1;
-#     $project->{'count'} += $count;
-#     makedir($udir);
-#     my $filename = clean_filename(basename($file));
-#     $filename =~ s/(\.[^.]*)?$/.mrc/;
-#     $copier->($file, "$udir/$filename")
-#         or fatal "Can't add file $file: $!";
-#     my %update = (
-#         'code'   => $u,
-#         'date'   => $now,
-#         'source' => $file,
-#         %marc,
-#         'count'  => $count,
-#     );
-#     wrkvfile("$udir/update.kv", \%update);
-#     wrproject($project);
-# }
-
 sub apline {
     my ($file, $str, $args) = @_;
     if (open my $fh, '>>', $file) {
@@ -2305,29 +2274,15 @@ sub apnext {
 
 sub rdkvfile {
     my ($f) = @_;
-    open my $fh, '<', $f or fatal "Can't open $f: $!";
-    my %kv;
-    while (<$fh>) {
-        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
-        chomp;
-        my ($key, $val) = split /\s+/, $_, 2;
-        $kv{$key} = $val;
-    }
-    #$kv{'path'} = dirname($f);
-    close $fh;
-    return \%kv;
+    return wantarray ? File::Kvpar->new($f)->elements : File::Kvpar->new($f)->head;
 }
 
 sub wrkvfile {
     my ($f, $kv, $append) = @_;
-    $kv ||= {};
     my $mode = $append ? '>>' : '>';
-    open my $fh, $mode, $f or fatal "Can't open $f: $!";
-    foreach my $k (sort keys %$kv) {
-        my $v = $kv->{$k};
-        print $fh "$k $v\n" if defined $v && !ref $v;
-    }
-    close $fh;
+    my $kvfile = File::Kvpar->new($mode, $f);
+    $kv ||= {};
+    $kvfile->write($kv);
 }
 
 sub files {
