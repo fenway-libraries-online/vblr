@@ -5,9 +5,11 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(0.3.041);
+$VERSION = q(0.3.071);
 
+use String::Expando;
 use File::Kvpar;
+use File::Kit;
 use IO::Compress::Gzip qw(gzip $GzipError) ;
 use Digest::SHA1  qw(sha1_hex);
 use Cwd qw(getcwd);
@@ -272,37 +274,82 @@ sub cmd_base {
 
 sub cmd_add {
     #@ add [-CRix] [-p PROTO] [-m DESCRIP] FILE [NAME] :: Add a MARC file to the project
-    my ($kit, $autoload, $descrip, $proto, $copy, $historical, $redo);
-    my $type = ADD;
+    my %opt;
     GetOptions(
-        'k|kit=s' => \$kit,
-        'L|auto-load' => \$autoload,
-        'x|delete' => sub { $type = DELETE },
-        'C|copy' => \$copy,
-        'm|description=s' => \$descrip,
-        'p|prototype=s' => \$proto,
-        'i|historical' => \$historical,
-        'R|redo' => \$redo,
+        'k|kit=s'         => \$opt{'kit'},
+        'L|auto-load'     => \$opt{'autoload'},
+        'x|delete'        => sub { $opt{'type'} = DELETE },
+        'C|copy'          => \$opt{'copy'},
+        'm|description=s' => \$opt{'description'},
+        'p|prototype=s'   => \$opt{'prototype'},
+        'i|historical'    => \$opt{'historical'},
+        'R|redo'          => \$opt{'redo'},
+        'v|verbose'       => \$opt{'verbose'},
     ) or usage;
-    if ($kit) {
-        my @conf = rdkvfile("conf/add.kv");
+    if ($opt{'kit'}) {
+        add_from_kit(delete $opt{'kit'}, %opt);
     }
     else {
         usage if @ARGV > 2 || @ARGV < 1;
         my ($file, $u) = @ARGV;
-        ask $u,       'Update code: ', strftime("%Y-%m", localtime) if !defined $u;
-        ask $descrip, 'Description: ' if !defined $descrip;
-        add(
-            'type' => $type,
-            'update' => $u,
-            'file' => $file,
-            'description' => $descrip,
-            'copy' => $copy,
-            'prototype' => $proto,
-            'historical' => $historical,
-            'redo' => $redo,
-        );
+        ask $u, 'Update code: ', strftime("%Y-%m", localtime) if !defined $u;
+        ask $opt{'description'}, 'Description: ' if !defined $opt{'description'};
+        @opt{qw(file update)} = ($file, $u);
+        add(%opt);
+        autoload($u, \%opt) if $opt{'autoload'};
     }
+}
+
+sub add_from_kit {
+    my ($k, %opt) = @_;
+    my $kit = File::Kit->new($k);
+    my @conf = rdkvfile("conf/add.kv");
+    my %conf = map { $_->{'#'} => $_ } grep { $_->{'@'} eq 'case' } @conf;
+    my %seq = ( 'numeric' => 1, 'alpha' => 'a' );
+    my $expando = String::Expando->new(
+        'decoder' => sub {
+            my ($self, $code, $stash) = @_;
+            while ($code =~ s/^([^.]+)\.//) {
+                $stash = $stash->{$1} || {};
+            }
+            return $stash->{$code};
+        },
+    );
+    my $dir = $kit->path . '/files';
+    foreach my $file ($kit->files) {
+        my $path = $dir . '/' . $file->{'name'};
+        my %ctx = ( 'file' => $file, 'sequence' => \%seq );
+        my $purp = $file->{'purpose'} || ADD;
+        my $case = $conf{$purp} || $conf{'default'}
+            or die "Unrecognized purpose: $purp";
+        my $proto   = $opt{'prototype'}   || $case->{'prototype'};
+        my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
+        my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
+        $_++ for values %seq;
+        add(
+            %opt,
+            'file'        => $path,
+            'update'      => $u,
+            'description' => $descrip,
+            'prototype'   => $proto,
+            'type'        => $opt{'type'}       || $case->{'type'} || $purp,
+            'copy'        => $opt{'copy'}       || bool($case->{'copy'}),
+            'historical'  => $opt{'historical'} || bool($case->{'historical'}),
+            'redo'        => $opt{'redo'}       || bool($case->{'redo'}),
+        );
+        autoload($u, \%opt) if $opt{'autoload'};
+    }
+}
+
+sub autoload {
+    my ($u, $opt) = @_;
+    my $b = '1-n';
+    divide_update($u, $opt, $b);
+    prepare_batch($u, $b, $opt);
+    $opt->{'autogen_loaded'} = $opt->{'gen_html'} = 1;  # XXX Really?
+    $opt->{'delete'} = 1 if $opt->{'type'} eq DELETE;
+    load_batch($u, $b, { %$opt, 'autogen_loaded' => 1, 'gen_html' => 1 });
+    finish_update($u);
 }
 
 sub cmd_note {
@@ -608,84 +655,29 @@ sub cmd_finish {
         'v|verbose' => \$verbose,
     ) or usage;
     usage if @ARGV > 2;
-    my %log;
     if (@ARGV == 0) {
         wrstatus('.', FINISHED);
+        aplog('finish');
+        aplast('finish');
+        run_hook('finish');
     }
     else {
         my ($u, $b) = resolve_update_and_batch(@ARGV);
         if (defined $u) {
-            $log{'update'} = $u;
             if (defined $b) {
                 wrstatus("updates/$u/batches/$b", FINISHED);
-                $log{'batch'} = $b;
+                aplog('finish', 'update' => $u, 'batch' => $b);
+                aplast('finish', 'update' => $u, 'batch' => $b);
+                run_hook('finish');
             }
             else {
-                # Update completed -- send notification
-                my $udir = "updates/$u";
-                wrstatus($udir, FINISHED);
-                my ($cfile) = find('conf/notify.kv',  $udir, '.', $root);
-                my ($tfile) = find('conf/notify.msg', $udir, '.', $root);
-                if (defined $cfile) {
-                    my %conf = %{ rdkvfile($cfile) };
-                    my $group = rdkvfile("$root/groups/$gcur/group.kv");
-                    my $update = rdupdate($u);
-                    $project->{'url'} ||= sub {
-                        my $www = rdkvfile("$root/conf/www.kv");
-                        my $urlbase = $www->{'url-base'};
-                        sprintf('%s/%s/', $urlbase, $project->{'code'});
-                    };
-                    $project->{'total'} ||= sub {
-                        my $f = find('bin/count', '.');
-                        return '' if !defined $f;
-                        my $n = qx($f);
-                        chomp $n;
-                        commify($n);
-                    };
-                    $update->{'summary'} = sub {
-                        my %x2h = (
-                            'bib add'        => 'new bib(s) created',
-                            'bib delete'     => 'existing bib(s) deleted',
-                            'bib discard'    => 'bib(s) discarded',
-                            'bib error'      => 'bib(s) with errors',
-                            'bib match'      => 'existing bib(s) matched',
-                            'bib replace'    => 'existing bib(s) replaced',
-                            'bib unresolved' => 'record(s) with multiple matches dropped',
-                            'bib unmatched'  => 'record(s) with no matches dropped',
-                            'mfhd add'       => 'new MFHD(s) created',
-                            'mfhd delete'    => 'existing MFHD(s) deleted',
-                            'mfhd error'     => 'MFHD(s) with errors',
-                            'mfhd replace'   => 'MFHD(s) replaced',
-                        );
-                        my %summary = update_summary($u);
-                        my @summary = map {
-                            my $h = $x2h{$_};
-                            my $n = $summary{$_};
-                            !$n ? () : ([$n, number($n, $h)])
-                        } sort keys %x2h;
-                        return join("\n", map { sprintf '%6d %s', @$_ } @summary);
-                    };
-                    $update->{'rectype'} = sub {
-                        my $t = $rectype2human{$update->{'marc-type'}};
-                        return number($update->{'count'}, $t);
-                    };
-                    notify({
-                        'template' => $tfile,
-                        %conf,
-                        'project' => $project,
-                        'group'   => $group,
-                        'update'  => $update,
-                    });
-                }
+                finish_update($u);
             }
         }
         else {
             fatal "I can't tell which update or batch you are finishing";
         }
     }
-    aplog('finish', %log);
-    aplast('finish', %log);
-    run_hook('finish');
 }
 
 sub cmd_groups {
@@ -720,9 +712,18 @@ sub cmd_projects {
 }
 
 sub cmd_updates {
-    #@ updates [UPDATE]... :: List updates
+    #@ updates [-v] [UPDATE]... :: List updates
+    my $verbose;
+    GetOptions(
+        'v|verbose' => \$verbose,
+    ) or usage;
     my @u = updates(@ARGV);
-    print $_, "\n" for @u;
+    if ($verbose) {
+        printf "%-26s %s\n", $_, rdupdate($_)->{'description'} for @u;
+    }
+    else {
+        print $_, "\n" for @u;
+    }
 }
 
 sub cmd_batches {
@@ -786,13 +787,13 @@ sub cmd_div { goto &cmd_divide }
 
 sub cmd_divide {
     #@ divide UPDATE [RANGE]... :: Divide an update into batches
-    my ($force, $verbose, $dry_run);
+    my %opt;
     GetOptions(
-        'f|force'   => \$force,
-        'v|verbose' => \$verbose,
-        'n|dry-run' => \$dry_run,
+        'f|force'   => \$opt{'force'},
+        'v|verbose' => \$opt{'verbose'},
+        'n|dry-run' => \$opt{'dry_run'},
     ) or usage;
-    $verbose = 1 if $dry_run;
+    $opt{'verbose'} = 1 if $opt{'dry_run'};
     usage if !@ARGV;
     my $u = shift @ARGV;
     @ARGV = qw(1-10) if !@ARGV;
@@ -803,47 +804,7 @@ sub cmd_divide {
     elsif (! -e "updates/$u") {
         fatal "No such update: $u";
     }
-    makedir("updates/$u/batches");
-    my @b = batches($u);
-    my $count = count_update($u);
-    my ($rs, $re) = (1, $count);  # Records remaining to be divided
-    if ($force) {
-        @b = ();
-    }
-    elsif (@b) {
-        my ($s, $e, @etc) = consolidate_ranges(@b);
-        fatal "Can't divide if there are gaps" if $s != 1 || @etc;
-        fatal "Update $u is already fully divided" if $s == 1 && $e == $count;
-        $rs = $e + 1;
-    }
-    if (!@ARGV) {
-        push @b, "$rs-$re";
-    }
-    else {
-        do {
-            my $b = shift @ARGV;
-            if ($b =~ /^(\d+)-(\d+)$/) {
-                usage if $1 != $rs && !$force;
-                usage if $2 < $1;
-                usage if $2 > $count;
-                $rs = $2 + 1;
-                push @b, $b;
-            }
-            elsif ($b =~ /^(\d+)-n?$/) {
-                usage if $1 != $rs && !$force;
-                usage if @ARGV;
-                push @b, "$1-$count";
-                $rs = $count + 1;
-            }
-        } while @ARGV;
-        push @b, "$rs-$re" if $rs != $count + 1;
-    }
-    print "Dry run...\n" if $dry_run;
-    foreach my $b (@b) {
-        print STDERR "batch $b\n" if $verbose;
-        mkbatch($u, $b) if !$dry_run;
-    }
-    run_hook('divide', update => $u);
+    divide_update($u, \%opt, @ARGV);
 }
 
 sub cmd_prep {
@@ -864,84 +825,7 @@ sub cmd_prep {
         $b = $b[0];
         warning "Assuming you want to prep the next new batch ($b) in update $u";
     }
-    my ($s, $e);
-    ($s, $e, $b) = batch_range($b, $u);
-    if ($verbose) {
-        print STDERR "Dry run...\n" if $dry_run;
-        print STDERR "update:  $u\nbatch:   $b\n";
-    }
-    my $udir = "updates/$u";
-    my $bdir = "$udir/batches/$b";
-    fatal "No batch $b in update $u" if ! -e $bdir;
-    my $prep = find('bin/prep', $bdir, $udir, '.');
-    fatal "No record prep script" if !$prep || !-x $prep || -d $prep;
-    my ($cfile) = find('conf/prep.kv', $bdir, $udir, '.');
-    fatal "No record prep config" if !$cfile || -d $cfile;
-    my $in   = files("$udir/*.mrc");
-    my $out  = join('/', $bdir, PREPARING, 'records.mrc');
-    my $err  = join('/', $bdir, PREPARING, 'prep.err');
-    my $cmd  = "marcn -h $b < $in | $prep -c $cfile -u $u -b $b > $out 2> $err";
-    if ($dry_run) {
-        print STDERR "command: $cmd\n";
-        return;
-    }
-    wrstatus($bdir, PREPARING);
-    my $prepdir = join('/', $bdir, PREPARING);
-    makedir("$prepdir/bin", "$prepdir/conf");
-    copy($prep, "$prepdir/bin/prep.used");
-    copy($cfile, "$prepdir/conf/prep.kv.used");
-    my $status = system $cmd;
-    my $result = ERR;
-    if ($status == 0) {
-        my %marc = marc($out);
-        my $count = $marc{'count'};
-        my $expec = $e - $s + 1;
-        $expec *= 2 if $marc{'type'} eq BIBMFHD;
-        if ($count == $expec) {
-            $result = OK;
-            print STDERR "Record prep complete; no errors\n" if $verbose;
-        }
-        else {
-            $status = -1;
-            if ($count == 0) {
-                print STDERR "Record prep failed silently without producing any records\n";
-            }
-            else {
-                print STDERR "Record prep dropped some records: expected $expec, got $count\n";
-            }
-        }
-    }
-    else {
-        print STDERR "Record prep failed; stderr follows\n";
-    }
-    if ($result eq ERR) {
-        unlink $out if ! -s $out;
-        copy($err, \*STDERR) if -s $err;
-        unlink $err if ! -s $err;
-        wrstatus($bdir, ERROR);
-        wrstatus($udir, ERROR);
-        #wrstatus('.',   ERROR);
-    }
-    else {
-        wrstatus($bdir, PREPARED);
-        wrstatus($udir, INPROCESS);
-        #wrstatus('.',   INPROCESS);
-    }
-    aplog('prep',
-        'count' => $e - $s + 1,
-        'result' => $result,
-        'update' => $u,
-        'batch' => $b,
-        'error' => $status,
-        'ready' => 0,
-    );
-    aplast('prep', update => $u, batch => $b);
-    apnext('check', update => $u, batch => $b);
-    if ($gen_html) {
-        local @ARGV = ('-z', $u, $b);
-        cmd_mkhtml();
-    }
-    run_hook('prep', update => $u, batch => $b);
+    prepare_batch($u, $b, {'verbose' => $verbose, 'dry_run' => $dry_run, 'gen_html' => $gen_html});
 }
 
 sub cmd_configure {
@@ -949,32 +833,6 @@ sub cmd_configure {
     fatal "Configuring must be done interactively" if ! -t 0;
     @ARGV = qw(prep load) if !@ARGV;
     configure(@ARGV);
-}
-
-sub cmd_run {
-    #@ run [-vn] FILE UPDATE DESCRIP :: Add, divide, prep, load, finish
-    fatal "Not yet implemented";
-    my $type = ADD;
-    my ($verbose, $dry_run);
-    GetOptions(
-        'x|delete' => sub { $type = DELETE },
-        'v|verbose' => \$verbose,
-        'n|dry-run' => \$dry_run,
-    ) or usage;
-    usage if @ARGV != 3;
-    my ($f, $u, $descrip) = @_;
-    my $b = '1-n';
-    add(
-        'type' => $type,
-        'update' => $u,
-        'file' => $f,
-        'description' => $descrip,
-        #'copy' => $copy,
-    );
-    divide($u, $b);
-    prep($u, $b);
-    load($u, $b);
-    finish($u);
 }
 
 sub cmd_load {
@@ -999,134 +857,14 @@ sub cmd_load {
         $b = $b[0];
         warning "Assuming you want to load the next prepped batch ($b) in update $u";
     }
-    my ($s, $e);
-    ($s, $e, $b) = batch_range($b, $u);
-    if ($verbose) {
-        print STDERR "Dry run...\n" if $dry_run;
-        print "update:  $u\nbatch:   $b\n";
-    }
-    my $udir = "updates/$u";
-    my $bdir = "$udir/batches/$b";
-    fatal "No such batch: $u $b" if ! -e $bdir;
-    fatal "Batch not prepared: $u $b" if rdstatus($bdir) ne PREPARED;
-    my ($cfile) = find('conf/load.kv', $bdir, $udir, '.');
-    fatal "Load config file not found" if !$cfile || !-e $cfile;
-    my $conf = rdkvfile($cfile);
-    my $interleaved = $conf->{'interleaved'};
-    $interleaved = defined $interleaved && $interleaved =~ /^[YyTt1]/;
-    my $update = rdupdate($u);
-    my $load_type = $update->{'type'} || ADD;
-    my $rec_type = $update->{'marc-type'} || die;
-    my @delete;
-    if ($delete) {
-        fatal "Deletion of previously loaded records is not yet implemented"
-            if $load_type ne DELETE;
-        @delete = $interleaved
-                    ? 'bh'
-                    : $rec_type eq BIB
-                        ? 'b'
-                        : fatal "Can't delete records of type $rec_type";
-    }
-    elsif ($load_type eq DELETE) {
-        fatal "You must always specify -x when doing a load that deletes records";
-    }
-    my $profile = $conf->{'profile'} || fatal "No load profile configured";
-    my $j = mkjobid();
-    my $jdir = "$bdir/jobs/$j";
-    my $file = "$bdir/jobs/$j/records.mrc";
-    my @cmd = (
-        'vload',
-        '-c' => $cfile,
-        '-o' => $j,
-        '-f' => $file,
-        '-i' => $profile, 
-        '-d' => "$jdir/output",
+    my %opt = (
+        'delete'         => $delete,
+        'verbose'        => $verbose,
+        'dry_run'        => $dry_run,
+        'autogen_loaded' => $autogen_loaded,
+        'gen_html'       => $gen_html,
     );
-    push @cmd, '-n' if $dry_run;
-    if (@delete) {
-        push @cmd, '-S', '-x', @delete;
-    }
-    elsif ($interleaved) {
-        push @cmd, '-m';
-    }
-    if ($dry_run) {
-        print STDERR join(' ', 'command:', @cmd), "\n";
-        return;
-    }
-    mkjob($u, $b, $j);
-    my $job = {
-        'code' => $j,
-        'date' => $now,
-        'file' => $file,
-        'profile' => $profile,
-        'load-type' => $load_type,
-        'interleaved' => $interleaved,
-    };
-    wrkvfile("$jdir/job.kv", $job);
-    wrstatus($jdir, LOADING);
-    # Actually load the records!
-    my $err = system(@cmd);
-    wrstatus($jdir, FINISHED);
-    my $log = "$jdir/output/$j.log";
-    my @results = load_results($log);
-    my %num;
-    my $drops = 0;
-    foreach (@results) {
-        next if $_->{'type'} ne $rec_type;
-        my $action = $_->{'action'};
-        $drops++ if $action eq 'unresolved' || $action eq 'unmatched';
-        $num{$action}++;
-    }
-    my $result;
-    if ($err == 0) {
-        $result = $job->{'result'} = OK;
-        print STDERR "Record load has run\n" if $verbose;
-        wrstatus($jdir, FINISHED);
-        wrstatus($bdir, LOADED);
-        if (!grep { rdstatus("updates/$u/batches/$_") ne LOADED } batches($u)) {
-            # All batches in this update have been loaded
-            wrstatus($udir, LOADED);
-        }
-    }
-    else {
-        $result = $job->{'result'} = ERR;
-        print STDERR "Record load failed\n" if $verbose;
-        wrstatus($jdir, ERROR);
-        wrstatus($bdir, ERROR);
-    }
-    print STDERR "Load results:\n";
-    printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
-    $job->{'add'}     = $num{ADD()}    || 0;
-    $job->{'match'}   = $num{MATCH()}  || 0;
-    $job->{'delete'}  = $num{DELETE()} || 0;
-    $job->{'replace'} = $num{REPLACE()} || 0;
-    $job->{'discard'} = ($num{DISCARD()} || 0) + ($num{UNRESOLVED()} || 0) + ($num{UNMATCHED()} || 0);
-    wrkvfile("$jdir/job.kv", $job);
-    aplog('load',
-        'result' => $result,
-        'update' => $u,
-        'batch' => $b,
-        'job' => $j,
-        'count' => $e - $s + 1,
-        'error' => $err,
-    );
-    if ($result eq ERR) {
-        apnext('check', update => $u, batch => $b);
-    }
-    else {
-        aplast('load', update => $u, batch => $b, job => $j);
-        apnext('finish', update => $u, batch => $b);
-    }
-    if ($autogen_loaded) {
-        open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
-        copy($fh, "$jdir/loaded.mrc");
-    }
-    if ($gen_html && $e - $s + 1 <= 5000) {
-        local @ARGV = ('-z', '-j' => $j);
-        cmd_mkhtml();
-    }
-    mkdrops($j) if $job->{'discard'} > 0;
-    run_hook('loaded', update => $u, batch => $b, job => $j);
+    load_batch($u, $b, \%opt);
 }
 
 sub mkdrops {
@@ -1328,6 +1066,7 @@ sub cmd_ls {
         print STDERR "No $type to list\n";
     }
 }
+
 sub cmd_match {
     #@ match [ -j JOB | [UPDATE [BATCH]] ] :: Predict matching
     my ($verbose, $u, $b, $j);
@@ -1850,6 +1589,330 @@ sub throw {
     die($exc."\n");
 }
 
+sub divide_update {
+    my ($u, $opt, @ranges) = @_;
+    makedir("updates/$u/batches");
+    my @b = batches($u);
+    my $count = count_update($u);
+    my ($rs, $re) = (1, $count);  # Records remaining to be divided
+    if ($opt->{'force'}) {
+        @b = ();
+    }
+    elsif (@b) {
+        my ($s, $e, @etc) = consolidate_ranges(@b);
+        fatal "Can't divide if there are gaps" if $s != 1 || @etc;
+        fatal "Update $u is already fully divided" if $s == 1 && $e == $count;
+        $rs = $e + 1;
+    }
+    if (!@ranges) {
+        push @b, "$rs-$re";
+    }
+    else {
+        do {
+            my $b = shift @ranges;
+            if ($b =~ /^(\d+)-(\d+)$/) {
+                usage if $1 != $rs && !$opt->{'force'};
+                usage if $2 < $1;
+                usage if $2 > $count;
+                $rs = $2 + 1;
+                push @b, $b;
+            }
+            elsif ($b =~ /^(\d+)-n?$/) {
+                usage if $1 != $rs && !$opt->{'force'};
+                usage if @ranges;
+                push @b, "$1-$count";
+                $rs = $count + 1;
+            }
+        } while @ranges;
+        push @b, "$rs-$re" if $rs != $count + 1;
+    }
+    print "Dry run...\n" if $opt->{'dry_run'};
+    foreach my $b (@b) {
+        print STDERR "batch $b\n" if $opt->{'verbose'};
+        mkbatch($u, $b) if !$opt->{'dry_run'};
+    }
+    run_hook('divide', update => $u) if !$opt->{'dry_run'};
+}
+
+sub prepare_batch {
+    my ($u, $b, $opt) = @_;
+    my ($verbose, $dry_run, $gen_html) = @$opt{qw(verbose dry_run gen_html)};
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    if ($opt->{'verbose'}) {
+        print STDERR "Dry run...\n" if $opt->{'dry_run'};
+        print STDERR "update:  $u\nbatch:   $b\n";
+    }
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    fatal "No batch $b in update $u" if ! -e $bdir;
+    my $prep = find('bin/prep', $bdir, $udir, '.');
+    fatal "No record prep script" if !$prep || !-x $prep || -d $prep;
+    my ($cfile) = find('conf/prep.kv', $bdir, $udir, '.');
+    fatal "No record prep config" if !$cfile || -d $cfile;
+    my $in   = files("$udir/*.mrc");
+    my $out  = join('/', $bdir, PREPARING, 'records.mrc');
+    my $err  = join('/', $bdir, PREPARING, 'prep.err');
+    my $cmd  = "marcn -h $b < $in | $prep -c $cfile -u $u -b $b > $out 2> $err";
+    if ($opt->{'dry_run'}) {
+        print STDERR "command: $cmd\n";
+        return;
+    }
+    wrstatus($bdir, PREPARING);
+    my $prepdir = join('/', $bdir, PREPARING);
+    makedir("$prepdir/bin", "$prepdir/conf");
+    copy($prep, "$prepdir/bin/prep.used");
+    copy($cfile, "$prepdir/conf/prep.kv.used");
+    my $status = system $cmd;
+    my $result = ERR;
+    if ($status == 0) {
+        my %marc = marc($out);
+        my $count = $marc{'count'};
+        my $expec = $e - $s + 1;
+        $expec *= 2 if $marc{'type'} eq BIBMFHD;
+        if ($count == $expec) {
+            $result = OK;
+            print STDERR "Record prep complete; no errors\n" if $opt->{'verbose'};
+        }
+        else {
+            $status = -1;
+            if ($count == 0) {
+                print STDERR "Record prep failed silently without producing any records\n";
+            }
+            else {
+                print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+            }
+        }
+    }
+    else {
+        print STDERR "Record prep failed; stderr follows\n";
+    }
+    if ($result eq ERR) {
+        unlink $out if ! -s $out;
+        copy($err, \*STDERR) if -s $err;
+        unlink $err if ! -s $err;
+        wrstatus($bdir, ERROR);
+        wrstatus($udir, ERROR);
+        #wrstatus('.',   ERROR);
+    }
+    else {
+        wrstatus($bdir, PREPARED);
+        wrstatus($udir, INPROCESS);
+        #wrstatus('.',   INPROCESS);
+    }
+    aplog('prep',
+        'count' => $e - $s + 1,
+        'result' => $result,
+        'update' => $u,
+        'batch' => $b,
+        'error' => $status,
+        'ready' => 0,
+    );
+    aplast('prep', update => $u, batch => $b);
+    apnext('check', update => $u, batch => $b);
+    if ($opt->{'gen_html'}) {
+        local @ARGV = ('-z', $u, $b);
+        cmd_mkhtml();
+    }
+    run_hook('prep', update => $u, batch => $b);
+}
+
+sub load_batch {
+    my ($u, $b, $opt) = @_;
+    my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html)
+        = @$opt{qw(delete verbose dry_run autogen_loaded gen_html)};
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    if ($opt->{'verbose'}) {
+        print STDERR "Dry run...\n" if $opt->{'dry_run'};
+        print "update:  $u\nbatch:   $b\n";
+    }
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    fatal "No such batch: $u $b" if ! -e $bdir;
+    fatal "Batch not prepared: $u $b" if rdstatus($bdir) ne PREPARED;
+    my ($cfile) = find('conf/load.kv', $bdir, $udir, '.');
+    fatal "Load config file not found" if !$cfile || !-e $cfile;
+    my $conf = rdkvfile($cfile);
+    my $interleaved = bool($conf->{'interleaved'});
+    my $update = rdupdate($u);
+    my $load_type = $update->{'type'} || ADD;
+    my $rec_type = $update->{'marc-type'} || die;
+    my @delete;
+    if ($opt->{'delete'} || $load_type eq DELETE) {
+        fatal "Deletion of previously loaded records is not yet implemented"
+            if $load_type ne DELETE;
+        @delete = $interleaved
+                    ? 'bh'
+                    : $rec_type eq BIB
+                        ? 'b'
+                        : fatal "Can't delete records of type $rec_type";
+    }
+    elsif ($load_type eq DELETE) {
+        fatal "You must always specify -x when doing a load that deletes records";
+    }
+    my $profile = $conf->{'profile'} || fatal "No load profile configured";
+    my $j = mkjobid();
+    my $jdir = "$bdir/jobs/$j";
+    my $file = "$bdir/jobs/$j/records.mrc";
+    my @cmd = (
+        'vload',
+        '-c' => $cfile,
+        '-o' => $j,
+        '-f' => $file,
+        '-i' => $profile, 
+        '-d' => "$jdir/output",
+    );
+    push @cmd, '-n' if $opt->{'dry_run'};
+    if (@delete) {
+        push @cmd, '-S', '-x', @delete;
+    }
+    elsif ($interleaved) {
+        push @cmd, '-m';
+    }
+    if ($opt->{'dry_run'}) {
+        print STDERR join(' ', 'command:', @cmd), "\n";
+        return;
+    }
+    mkjob($u, $b, $j);
+    my $job = {
+        'code' => $j,
+        'date' => $now,
+        'file' => $file,
+        'profile' => $profile,
+        'load-type' => $load_type,
+        'interleaved' => $interleaved,
+    };
+    wrkvfile("$jdir/job.kv", $job);
+    wrstatus($jdir, LOADING);
+    # Actually load the records!
+    my $err = system(@cmd);
+    wrstatus($jdir, FINISHED);
+    my $log = "$jdir/output/$j.log";
+    my @results = load_results($log);
+    my %num;
+    my $drops = 0;
+    foreach (@results) {
+        next if $_->{'type'} ne $rec_type;
+        my $action = $_->{'action'};
+        $drops++ if $action eq 'unresolved' || $action eq 'unmatched';
+        $num{$action}++;
+    }
+    my $result;
+    if ($err == 0) {
+        $result = $job->{'result'} = OK;
+        print STDERR "Record load has run\n" if $opt->{'verbose'};
+        wrstatus($jdir, FINISHED);
+        wrstatus($bdir, LOADED);
+        if (!grep { rdstatus("updates/$u/batches/$_") ne LOADED } batches($u)) {
+            # All batches in this update have been loaded
+            wrstatus($udir, LOADED);
+        }
+    }
+    else {
+        $result = $job->{'result'} = ERR;
+        print STDERR "Record load failed\n" if $opt->{'verbose'};
+        wrstatus($jdir, ERROR);
+        wrstatus($bdir, ERROR);
+    }
+    print STDERR "Load results:\n";
+    printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+    $job->{'add'}     = $num{ADD()}    || 0;
+    $job->{'match'}   = $num{MATCH()}  || 0;
+    $job->{'delete'}  = $num{DELETE()} || 0;
+    $job->{'replace'} = $num{REPLACE()} || 0;
+    $job->{'discard'} = ($num{DISCARD()} || 0) + ($num{UNRESOLVED()} || 0) + ($num{UNMATCHED()} || 0);
+    wrkvfile("$jdir/job.kv", $job);
+    aplog('load',
+        'result' => $result,
+        'update' => $u,
+        'batch' => $b,
+        'job' => $j,
+        'count' => $e - $s + 1,
+        'error' => $err,
+    );
+    if ($result eq ERR) {
+        apnext('check', update => $u, batch => $b);
+    }
+    else {
+        aplast('load', update => $u, batch => $b, job => $j);
+        apnext('finish', update => $u, batch => $b);
+    }
+    if ($opt->{'autogen_loaded'}) {
+        open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
+        copy($fh, "$jdir/loaded.mrc");
+    }
+    if ($opt->{'gen_html'} && $e - $s + 1 <= 5000) {
+        local @ARGV = ('-z', '-j' => $j);
+        cmd_mkhtml();
+    }
+    mkdrops($j) if $job->{'discard'} > 0;
+    run_hook('loaded', update => $u, batch => $b, job => $j);
+}
+
+sub finish_update {
+    my ($u) = @_;
+    # Update completed -- send notification
+    my $udir = "updates/$u";
+    wrstatus($udir, FINISHED);
+    my ($cfile) = find('conf/notify.kv',  $udir, '.', $root);
+    my ($tfile) = find('conf/notify.msg', $udir, '.', $root);
+    if (defined $cfile) {
+        my %conf = %{ rdkvfile($cfile) };
+        my $group = rdkvfile("$root/groups/$gcur/group.kv");
+        my $update = rdupdate($u);
+        $project->{'url'} ||= sub {
+            my $www = rdkvfile("$root/conf/www.kv");
+            my $urlbase = $www->{'url-base'};
+            sprintf('%s/%s/', $urlbase, $project->{'code'});
+        };
+        $project->{'total'} ||= sub {
+            my $f = find('bin/count', '.');
+            return '' if !defined $f;
+            my $n = qx($f);
+            chomp $n;
+            commify($n);
+        };
+        $update->{'summary'} = sub {
+            my %x2h = (
+                'bib add'        => 'new bib(s) created',
+                'bib delete'     => 'existing bib(s) deleted',
+                'bib discard'    => 'bib(s) discarded',
+                'bib error'      => 'bib(s) with errors',
+                'bib match'      => 'existing bib(s) matched',
+                'bib replace'    => 'existing bib(s) replaced',
+                'bib unresolved' => 'record(s) with multiple matches dropped',
+                'bib unmatched'  => 'record(s) with no matches dropped',
+                'mfhd add'       => 'new MFHD(s) created',
+                'mfhd delete'    => 'existing MFHD(s) deleted',
+                'mfhd error'     => 'MFHD(s) with errors',
+                'mfhd replace'   => 'MFHD(s) replaced',
+            );
+            my %summary = update_summary($u);
+            my @summary = map {
+                my $h = $x2h{$_};
+                my $n = $summary{$_};
+                !$n ? () : ([$n, number($n, $h)])
+            } sort keys %x2h;
+            return join("\n", map { sprintf '%6d %s', @$_ } @summary);
+        };
+        $update->{'rectype'} = sub {
+            my $t = $rectype2human{$update->{'marc-type'}};
+            return number($update->{'count'}, $t);
+        };
+        notify({
+            'template' => $tfile,
+            %conf,
+            'project' => $project,
+            'group'   => $group,
+            'update'  => $update,
+        });
+    }
+    aplog('finish', 'update' => $u);
+    aplast('finish', 'update' => $u);
+    run_hook('finish');
+}
+
 sub notify {
     my ($arg, @attach) = @_;
     $arg->{'to'}  = join(', ', @{$arg->{'to'} } ) if ref $arg->{'to'};
@@ -1959,8 +2022,10 @@ sub askbool($) {
     fatal "Can't ask for input in a non-interactive session" if ! -t 0;
     print STDERR $prompt, ' [yN] ';
     my $val = <STDIN>;
-    return defined($val) && $val =~ /^[TtYy1]/;
+    return bool($val);
 }
+
+sub bool { defined $_[0] && $_[0] =~ /^[TtYy1]/ }
 
 sub ask(\$$;$) {
     my ($ref, $prompt, $default) = @_;
@@ -2639,11 +2704,16 @@ sub add {
     # Look at the file
     print STDERR "Checking file $file...\n";
     my %marc = marc($file);
-    if ($type eq DELETE) {
-        $marc{'status'} eq DELETE || fatal "Deletions must have status d";
+    if (defined $type) {
+        if ($type eq DELETE) {
+            $marc{'status'} eq DELETE || fatal "Deletions must have status d";
+        }
+        else {
+            $marc{'status'} ne DELETE || fatal "Additions must not have status d";
+        }
     }
     else {
-        $marc{'status'} ne DELETE || fatal "Additions must not have status d";
+        $type = ADD;
     }
     my $count  = delete $marc{'count'};
     my $errors = delete $marc{'error-count'};
