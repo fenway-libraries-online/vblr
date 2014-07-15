@@ -950,10 +950,15 @@ sub resolve_update_batch_and_job {
 
 sub cmd_results {
     #@ results [-vj] UPDATE [BATCH] | JOB... :: Show detailed load results
-    my ($verbose, $jobs);
+    my ($verbose, $jobs, %tally);
     GetOptions(
         'v|verbose' => \$verbose,
         'j|jobs' => \$jobs,
+        't|tally=s' => sub {
+            my ($type, $action) = split /:/, $_[1];
+            $action = '*' if !defined $action;
+            $tally{$type}{$action} = 1;
+        },
     ) or exit usage;
     my @jobs;
     if ($jobs) {
@@ -983,6 +988,12 @@ sub cmd_results {
         my $bdir = "$udir/batches/$b";
         my $log = files("$bdir/jobs/$j/output/*.log");
         my @results = load_results($log);
+        if (%tally) {
+            @results = grep {
+                my $T = $tally{$_->{'type'}};
+                $T && ( $T->{'*'} || $T->{$_->{'action'}} )
+            } @results;
+        }
         $num{"$_->{'type'} $_->{'action'}"}++ for @results;
         next if !$verbose;
         my $g = 0;
@@ -1004,7 +1015,14 @@ sub cmd_results {
     }
     $num{'dup'} = scalar grep { $_ > 1 } values %dup if $verbose;
     print STDERR "Load results:\n" if $verbose;
-    printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+    if (%tally) {
+        my $n = 0;
+        $n += $_ for values %num;
+        print $n, "\n";
+    }
+    else {
+        printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
+    }
 }
 
 sub cmd_res1 {
