@@ -904,25 +904,6 @@ sub cmd_mkdrops {
     system("$root/bin/mkdrops", @ARGV);
 }
 
-# sub cmd_result {
-#     my $verbose;
-#     GetOptions(
-#         'v|verbose' => \$verbose,
-#     ) or usage;
-#     usage if !@ARGV;
-#     my %num;
-#     foreach my $j (@ARGV) {
-#         my $log = files("updates/*/batches/*/$j/output/*.log");
-#         my @results = load_results($log);
-#         foreach (@results) {
-#             my ($action, $id) = @$_{qw(action id)};
-#             print "$j $action $id\n" if $verbose;
-#             $num{$action}++;
-#         }
-#     }
-#     printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
-# }
-
 sub cmd_jobs {
     #@ jobs [UPDATE] [BATCH] :: List load jobs
     my $brief;
