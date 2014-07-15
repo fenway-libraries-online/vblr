@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(0.3.071);
+$VERSION = q(0.3.078);
 
 use String::Expando;
 use File::Kvpar;
@@ -130,6 +130,21 @@ my %record_encoding = (
     'u' => UTF8,
 );
 
+my %result2descrip = (
+    'bib add'        => 'new bib(s) created',
+    'bib delete'     => 'existing bib(s) deleted',
+    'bib discard'    => 'bib(s) discarded',
+    'bib error'      => 'bib(s) with errors',
+    'bib match'      => 'existing bib(s) matched',
+    'bib replace'    => 'existing bib(s) replaced',
+    'bib unresolved' => 'record(s) with multiple matches dropped',
+    'bib unmatched'  => 'record(s) with no matches dropped',
+    'mfhd add'       => 'new MFHD(s) created',
+    'mfhd delete'    => 'existing MFHD(s) deleted',
+    'mfhd error'     => 'MFHD(s) with errors',
+    'mfhd replace'   => 'MFHD(s) replaced',
+);
+
 sub projwalk(&@);
 sub usage;
 sub usage_commands;
@@ -152,6 +167,9 @@ my $project;
 @ARGV = qw(help) if !@ARGV;
 
 my $now = strftime(TIMESTAMP, localtime);
+my $expando = String::Expando->new(
+    'decoder' => \&expando_decoder,
+);
 
 GetOptions(
     'r|root=s' => \$root,
@@ -273,10 +291,10 @@ sub cmd_base {
 }
 
 sub cmd_add {
-    #@ add [-CRix] [-p PROTO] [-m DESCRIP] FILE [NAME] :: Add a MARC file to the project
+    #@ add [-LCRikvx] [-p PROTO] [-m DESCRIP] FILE|KIT [NAME] :: Add a MARC file to the project
     my %opt;
     GetOptions(
-        'k|kit=s'         => \$opt{'kit'},
+        'k|from-kits'     => \$opt{'kits'},
         'L|auto-load'     => \$opt{'autoload'},
         'x|delete'        => sub { $opt{'type'} = DELETE },
         'C|copy'          => \$opt{'copy'},
@@ -285,9 +303,11 @@ sub cmd_add {
         'i|historical'    => \$opt{'historical'},
         'R|redo'          => \$opt{'redo'},
         'v|verbose'       => \$opt{'verbose'},
+        'q|quiet'         => \$opt{'quiet'},
     ) or usage;
-    if ($opt{'kit'}) {
-        add_from_kit(delete $opt{'kit'}, %opt);
+    my @updates;
+    if (delete $opt{'kits'}) {
+        @updates = add_from_kits(\%opt, @ARGV);
     }
     else {
         usage if @ARGV > 2 || @ARGV < 1;
@@ -296,54 +316,62 @@ sub cmd_add {
         ask $opt{'description'}, 'Description: ' if !defined $opt{'description'};
         @opt{qw(file update)} = ($file, $u);
         add(%opt);
+        @updates = ($u);
         autoload($u, \%opt) if $opt{'autoload'};
+    }
+    if ($opt{'quiet'}) {
+        exit -1 if !@updates;
+    }
+    else {
+        print $_, "\n" for @updates;
     }
 }
 
-sub add_from_kit {
-    my ($k, %opt) = @_;
-    my $kit = File::Kit->new($k);
+sub add_from_kits {
+    my $opt = shift;
     my @conf = rdkvfile("conf/add.kv");
     my %conf = map { $_->{'#'} => $_ } grep { $_->{'@'} eq 'case' } @conf;
-    my %seq = ( 'numeric' => 1, 'alpha' => 'a' );
-    my $expando = String::Expando->new(
-        'decoder' => sub {
-            my ($self, $code, $stash) = @_;
-            while ($code =~ s/^([^.]+)\.//) {
-                $stash = $stash->{$1} || {};
+    my @updates;
+    foreach my $k (@_) {
+        my $kit = File::Kit->new($k);
+        my %seq = ( 'numeric' => 1, 'alpha' => 'a' );
+        my $dir = $kit->path . '/files';
+        foreach my $file ($kit->files) {
+            my $path = $dir . '/' . $file->{'name'};
+            if (!-f $path) {
+                print STDERR "Missing file in kit $k: $path\n";
+                next;
             }
-            return $stash->{$code};
-        },
-    );
-    my $dir = $kit->path . '/files';
-    foreach my $file ($kit->files) {
-        my $path = $dir . '/' . $file->{'name'};
-        my %ctx = ( 'file' => $file, 'sequence' => \%seq );
-        my $purp = $file->{'purpose'} || ADD;
-        my $case = $conf{$purp} || $conf{'default'}
-            or die "Unrecognized purpose: $purp";
-        my $proto   = $opt{'prototype'}   || $case->{'prototype'};
-        my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
-        my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
-        $_++ for values %seq;
-        add(
-            %opt,
-            'file'        => $path,
-            'update'      => $u,
-            'description' => $descrip,
-            'prototype'   => $proto,
-            'type'        => $opt{'type'}       || $case->{'type'} || $purp,
-            'copy'        => $opt{'copy'}       || bool($case->{'copy'}),
-            'historical'  => $opt{'historical'} || bool($case->{'historical'}),
-            'redo'        => $opt{'redo'}       || bool($case->{'redo'}),
-        );
-        autoload($u, \%opt) if $opt{'autoload'};
+            my %ctx = ( 'file' => $file, 'sequence' => \%seq );
+            my $purp = $file->{'purpose'} || ADD;
+            my $case = $conf{$purp} || $conf{'default'}
+                or die "Unrecognized purpose: $purp";
+            my $proto   = $opt->{'prototype'}   || $case->{'prototype'};
+            my $descrip = $opt->{'description'} || $expando->expand($case->{'description'}, \%ctx);
+            my $u       = $opt->{'update'}      || $expando->expand($case->{'code'},        \%ctx);
+            push @updates, $u;
+            add(
+                %$opt,
+                'file'        => $path,
+                'update'      => $u,
+                'description' => $descrip,
+                'prototype'   => $proto,
+                'type'        => $opt->{'type'}       ||= $case->{'type'} || $purp,
+                'copy'        => $opt->{'copy'}       || bool($case->{'copy'}),
+                'historical'  => $opt->{'historical'} || bool($case->{'historical'}),
+                'redo'        => $opt->{'redo'}       || bool($case->{'redo'}),
+            );
+            autoload($u, $opt) if $opt->{'autoload'};
+            $_++ for values %seq;
+        }
     }
+    return @updates;
 }
 
 sub autoload {
     my ($u, $opt) = @_;
     my $b = '1-n';
+    $opt->{'autogen_loaded'} = $opt->{'gen_html'} = 0;  # XXX Really?
     divide_update($u, $opt, $b);
     prepare_batch($u, $b, $opt);
     $opt->{'autogen_loaded'} = $opt->{'gen_html'} = 1;  # XXX Really?
@@ -1540,7 +1568,7 @@ sub cmd_project {
 }
 
 sub cmd_notify {
-    #@ notify [-d CONFDIR] [-vn] [-D key=val]... [-TB FILE] [-ftcb ADDR] [-s SUBJ]
+    #@ notify [-d CONFDIR] [-vn] [-D key=val]... [-TB FILE] [-ftcb ADDR] [-s SUBJ] [FILE...]
     my ($verbose, $dry_run, @to, @cc, @bcc, %conf, %var);
     my $confdir = 'conf';
     GetOptions(
@@ -1560,10 +1588,11 @@ sub cmd_notify {
         'c|cc=s'       => \@cc,
         'b|bcc=s'      => \@bcc,
     ) or usage;
-    %conf = ( %{ rdkvfile("$confdir/notify.kv") }, %var );
+    %conf = ( %conf, %var, %{ rdkvfile("$confdir/notify.kv") } );
     $conf{'to'}  = join(', ', @to ) if @to;
     $conf{'cc'}  = join(', ', @cc ) if @cc;
     $conf{'bcc'} = join(', ', @bcc) if @bcc;
+    $conf{'dryrun'} = 1 if $dry_run;
     notify(\%conf, @ARGV);
 }
 
@@ -1859,47 +1888,8 @@ sub finish_update {
     my ($tfile) = find('conf/notify.msg', $udir, '.', $root);
     if (defined $cfile) {
         my %conf = %{ rdkvfile($cfile) };
-        my $group = rdkvfile("$root/groups/$gcur/group.kv");
+        my $group = rdgroup($gcur);
         my $update = rdupdate($u);
-        $project->{'url'} ||= sub {
-            my $www = rdkvfile("$root/conf/www.kv");
-            my $urlbase = $www->{'url-base'};
-            sprintf('%s/%s/', $urlbase, $project->{'code'});
-        };
-        $project->{'total'} ||= sub {
-            my $f = find('bin/count', '.');
-            return '' if !defined $f;
-            my $n = qx($f);
-            chomp $n;
-            commify($n);
-        };
-        $update->{'summary'} = sub {
-            my %x2h = (
-                'bib add'        => 'new bib(s) created',
-                'bib delete'     => 'existing bib(s) deleted',
-                'bib discard'    => 'bib(s) discarded',
-                'bib error'      => 'bib(s) with errors',
-                'bib match'      => 'existing bib(s) matched',
-                'bib replace'    => 'existing bib(s) replaced',
-                'bib unresolved' => 'record(s) with multiple matches dropped',
-                'bib unmatched'  => 'record(s) with no matches dropped',
-                'mfhd add'       => 'new MFHD(s) created',
-                'mfhd delete'    => 'existing MFHD(s) deleted',
-                'mfhd error'     => 'MFHD(s) with errors',
-                'mfhd replace'   => 'MFHD(s) replaced',
-            );
-            my %summary = update_summary($u);
-            my @summary = map {
-                my $h = $x2h{$_};
-                my $n = $summary{$_};
-                !$n ? () : ([$n, number($n, $h)])
-            } sort keys %x2h;
-            return join("\n", map { sprintf '%6d %s', @$_ } @summary);
-        };
-        $update->{'rectype'} = sub {
-            my $t = $rectype2human{$update->{'marc-type'}};
-            return number($update->{'count'}, $t);
-        };
         notify({
             'template' => $tfile,
             %conf,
@@ -1934,6 +1924,16 @@ sub notify {
     else {
         open $fh, '|-', @sendmail or die "Can't run sendmail: $!";
     }
+    $arg->{'project'} = $project;
+    $arg->{'group'} ||= rdgroup($gcur);
+    $project->{'url'} = \&project_url;
+    $project->{'total'} = \&project_count_pretty;
+    if (defined $arg->{'update'}) {
+        my $update = $arg->{'update'};
+        $arg->{'update'} = $update = rdupdate($update) if !ref $update;
+        $update->{'summary'} = \&update_summary_pretty;
+        $update->{'rectype'} = \&update_record_type;
+    }
     makemail(
         %$arg,
         'attachments' => [ @attach ],
@@ -1941,10 +1941,43 @@ sub notify {
     );
 }
 
+sub project_url {
+    my ($p) = @_;
+    my $www = rdkvfile("$root/conf/www.kv");
+    my $urlbase = $www->{'url-base'};
+    sprintf('%s/%s/', $urlbase, $p->{'code'});
+}
+
+sub project_count_pretty {
+    my ($p) = @_;
+    my $f = find('bin/count', '.');
+    return '' if !defined $f;
+    my $n = qx($f);
+    chomp $n;
+    commify($n);
+}
+
+sub update_record_type {
+    my ($update) = @_;
+    my $t = $rectype2human{$update->{'marc-type'}};
+    return number($update->{'count'}, $t);
+}
+
+sub update_summary_pretty {
+    my ($update) = @_;
+    my %summary = update_summary($update);
+    my @summary = map {
+        my $h = $result2descrip{$_};
+        my $n = $summary{$_};
+        !$n ? () : ([$n, number($n, $h)])
+    } sort keys %result2descrip;
+    return join("\n", map { sprintf '%6d %s', @$_ } @summary);
+}
+
 sub update_summary {
     my ($u) = @_;
     my ($b, $j, @jobs);
-    my $update = rdupdate($u);
+    $u = $u->{'code'} if ref $u;
     foreach my $b (batches($u)) {
         push @jobs, map { [ $u, $b, $_ ] } jobs($u, $b);
     }
@@ -2417,9 +2450,19 @@ sub wrproject {
     wrkvfile('project.kv', $kv);
 }
 
+sub rdgroup {
+    my ($g) = @_;
+    rdkvfile("$root/groups/$g/group.kv");
+}
+
 sub rdupdate {
     my ($u) = @_;
     rdkvfile("updates/$u/update.kv");
+}
+
+sub wrgroup {
+    my ($g, $kv) = @_;
+    wrkvfile("$root/groups/$g/group.kv", $kv);
 }
 
 sub wrupdate {
@@ -2719,10 +2762,8 @@ sub add {
     my $errors = delete $marc{'error-count'};
     if ($errors) {
         print STDERR ERR, " $errors error(s) in $count records\n";
-        if (-t 0) {
-            ask my $continue, 'Continue? ', 'N';
-            fatal "Cancelled" if $continue !~ /^[Yy]/;
-        }
+        ask my $continue, 'Continue? ', 'N';
+        fatal "Cancelled" if $continue !~ /^[Yy]/;
     }
     else {
         print STDERR OK, " $count records\n";
@@ -2792,6 +2833,7 @@ sub add {
         aplast($verb, update => $u);
         run_hook('added', update => $u, batch => $b);
     }
+    return $count;
 }
 
 sub mklist {
@@ -3189,7 +3231,7 @@ sub makemail {
             $header = <$fh>;
             chomp $header;
         }
-        @body = expand(undef, \%conf, <$fh>);
+        @body = map { chomp; $expando->expand($_, \%conf) } <$fh>;
         close $fh;
     }
     else {
@@ -3203,7 +3245,7 @@ Cc: %(cc)
 Bcc: %(bcc)
 EOS
     }
-    @header = grep { !/^[^\s:]*:\s*$/ } expand(undef, \%conf, split /\n/, $header);
+    @header = grep { !/^[^\s:]*:\s*$/ } map { $expando->expand($_, \%conf) } split /\n/, $header;
     @body = () if ! grep length, @body;
     if (defined $conf{'body'}) {
         open my $fh, '<', $conf{'body'} or die "Can't open body file $conf{'body'}: $!";
@@ -3263,8 +3305,9 @@ sub filetype {
 
 sub keyval {
     my ($var, $key) = @_;
-    my $val;
+    my ($val, $parval);
     foreach (split /(?=\.)|(?=\[)/, $key) {
+        $parval = $val;
         if (/^\[(\d+)\]$/) {
             return '' if ref($val) ne 'ARRAY' || @$val <= $1;
             $val = $val->[$1];
@@ -3278,7 +3321,7 @@ sub keyval {
         }
         return '' if !defined $val;
         if (ref($val) eq 'CODE') {
-            $val = $val->();
+            $val = $val->($parval);
             return '' if !defined $val;
         }
     }
@@ -3286,9 +3329,8 @@ sub keyval {
 }
 
 sub expand {
-    my ($rx, $var, @parts) = @_;
-    $rx ||= qr/\%\(([^\s()]+)\)/;
-    $rx = qr/$rx/ if !ref $rx;
+    my ($var, @parts) = @_;
+    my $rx = qr/\%\(([^\s()]+)\)/;
     my ($cond, @out);
     while (@parts) {
         local $_ = shift @parts;
@@ -3338,3 +3380,15 @@ sub commify {
     );
     return $sign . $commified . $frac;
 }
+
+sub expando_decoder {
+    my ($self, $code, $stash) = @_;
+    local $_;  # Because $val->($stash) below may mess with pos($_)
+    while ($code =~ s/^([^.]+)\.//) {
+        $stash = $stash->{$1} || {};
+    }
+    my $val = $stash->{$code};
+    $val = $val->($stash) if ref($val) eq 'CODE';
+    return $val;
+}
+
