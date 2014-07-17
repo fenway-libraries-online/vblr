@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(0.3.078);
+$VERSION = q(1.001);
 
 use String::Expando;
 use File::Kvpar;
@@ -292,10 +292,15 @@ sub cmd_base {
 
 sub cmd_add {
     #@ add [-LCRikvx] [-p PROTO] [-m DESCRIP] FILE|KIT [NAME] :: Add a MARC file to the project
-    my %opt;
+    my (%opt, %meta);
     GetOptions(
         'k|from-kits'     => \$opt{'kits'},
         'L|auto-load'     => \$opt{'autoload'},
+        'D|define=s'      => sub {
+                                 my ($k, $v) = split /=/, $_[1], 2;
+                                 usage if !defined $v;
+                                 $meta{$k} = $v;
+                             },
         'x|delete'        => sub { $opt{'type'} = DELETE },
         'C|copy'          => \$opt{'copy'},
         'm|description=s' => \$opt{'description'},
@@ -305,6 +310,7 @@ sub cmd_add {
         'v|verbose'       => \$opt{'verbose'},
         'q|quiet'         => \$opt{'quiet'},
     ) or usage;
+    $opt{'meta'} = \%meta;
     my @updates;
     if (delete $opt{'kits'}) {
         @updates = add_from_kits(\%opt, @ARGV);
@@ -328,7 +334,7 @@ sub cmd_add {
 }
 
 sub add_from_kits {
-    my $opt = shift;
+    my %opt = %{ shift() };
     my @conf = rdkvfile("conf/add.kv");
     my %conf = map { $_->{'#'} => $_ } grep { $_->{'@'} eq 'case' } @conf;
     my @updates;
@@ -346,22 +352,22 @@ sub add_from_kits {
             my $purp = $file->{'purpose'} || ADD;
             my $case = $conf{$purp} || $conf{'default'}
                 or die "Unrecognized purpose: $purp";
-            my $proto   = $opt->{'prototype'}   || $case->{'prototype'};
-            my $descrip = $opt->{'description'} || $expando->expand($case->{'description'}, \%ctx);
-            my $u       = $opt->{'update'}      || $expando->expand($case->{'code'},        \%ctx);
+            my $proto   = $opt{'prototype'}   || $case->{'prototype'};
+            my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
+            my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
             push @updates, $u;
             add(
-                %$opt,
+                %opt,
                 'file'        => $path,
                 'update'      => $u,
                 'description' => $descrip,
                 'prototype'   => $proto,
-                'type'        => $opt->{'type'}       ||= $case->{'type'} || $purp,
-                'copy'        => $opt->{'copy'}       || bool($case->{'copy'}),
-                'historical'  => $opt->{'historical'} || bool($case->{'historical'}),
-                'redo'        => $opt->{'redo'}       || bool($case->{'redo'}),
+                'type'        => $opt{'type'}       || $case->{'type'} || $purp,
+                'copy'        => $opt{'copy'}       || bool($case->{'copy'}),
+                'historical'  => $opt{'historical'} || bool($case->{'historical'}),
+                'redo'        => $opt{'redo'}       || bool($case->{'redo'}),
             );
-            autoload($u, $opt) if $opt->{'autoload'};
+            autoload($u, \%opt) if $opt{'autoload'};
             $_++ for values %seq;
         }
     }
@@ -2742,7 +2748,7 @@ sub resolve_update_and_batch {
 
 sub add {
     my %arg = @_;
-    my ($type, $proto, $u, $file, $descrip, $copy, $redo) = @arg{qw(type prototype update file description copy redo)};
+    my ($type, $proto, $u, $file, $descrip, $copy, $redo, $meta) = @arg{qw(type prototype update file description copy redo meta)};
     # Look at the file
     print STDERR "Checking file $file...\n";
     my %marc = marc($file);
@@ -2800,6 +2806,7 @@ sub add {
         %update = ( %{ rdkvfile("$prodir/update.kv") }, 'prototype' => $proto );
     }
     %update = (
+        %{ $meta || {} },
         %update,
         'created' => $now,
         'type' => $type,
