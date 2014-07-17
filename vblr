@@ -1929,6 +1929,7 @@ sub notify {
     else {
         open $fh, '|-', @sendmail or die "Can't run sendmail: $!";
     }
+    my @attach_dirs = qw(.);
     $arg->{'project'} = $project;
     $arg->{'group'} ||= rdgroup($gcur);
     $project->{'url'} = \&project_url;
@@ -1938,11 +1939,17 @@ sub notify {
         $arg->{'update'} = $update = rdupdate($update) if !ref $update;
         $update->{'summary'} = \&update_summary_pretty;
         $update->{'rectype'} = \&update_record_type;
+        my $u = $update->{'code'};
+        unshift @attach_dirs, "updates/$u";
     }
+    my %config = (
+        'printer' => sub { print $fh $_ },
+        'attach-dirs' => \@attach_dirs,
+    );
     makemail(
+        \%config,
         %$arg,
         'attachments' => [ @attach ],
-        'code' => sub { print $fh $_ },
     );
 }
 
@@ -3126,6 +3133,7 @@ sub old_load_results {
 
 sub find {
     my $f = shift;
+    return $f if $f =~ m{^/} && -e $f;
     my @files = files(map { "$_/$f" } @_);
     return shift @files;
 }
@@ -3223,11 +3231,19 @@ sub options {
     };
 }
 
+sub find_attachment {
+    my ($f, @dirs) = @_;
+    my @f = find($f, @dirs);
+    fatal "Can't find attachment $f" if !@f;
+    return $f[0];
+}
+
 sub makemail {
-    my %conf = @_;
-    my $tmpl = $conf{'template'};
-    my @attach = @{ $conf{'attachments'} || [] };
-    my $code = $conf{'code'};
+    my ($config, %arg) = @_;
+    my $print = $config->{'printer'};
+    my $tmpl = $arg{'template'};
+    my $attdirs = $config->{'attach-dirs'} || [];
+    my @attach = map { find_attachment($_, @$attdirs) } @{ $arg{'attachments'} || [] };
     my ($header, @header, @body);
     if (defined $tmpl) {
         $tmpl = files($tmpl) if ! -e $tmpl;
@@ -3237,7 +3253,23 @@ sub makemail {
             $header = <$fh>;
             chomp $header;
         }
-        @body = map { chomp; $expando->expand($_, \%conf) } <$fh>;
+        @body = map {
+            chomp;
+            if (/^!##/) {
+                ;
+            }
+            elsif (s/^!<<\s*(?=\S)//) {
+                my $f = find_attachment($expando->expand($_, \%arg), @$attdirs);
+                open my $fhatt, '<', $f
+                    or fatal "Can't open file $f for inclusion: $!";
+                my @lines = <$fhatt>;
+                chomp @lines;
+                @lines;
+            }
+            else {
+                $expando->expand($_, \%arg);
+            }
+        } <$fh>;
         close $fh;
     }
     else {
@@ -3251,10 +3283,10 @@ Cc: %(cc)
 Bcc: %(bcc)
 EOS
     }
-    @header = grep { !/^[^\s:]*:\s*$/ } map { $expando->expand($_, \%conf) } split /\n/, $header;
+    @header = grep { !/^[^\s:]*:\s*$/ } map { $expando->expand($_, \%arg) } split /\n/, $header;
     @body = () if ! grep length, @body;
-    if (defined $conf{'body'}) {
-        open my $fh, '<', $conf{'body'} or die "Can't open body file $conf{'body'}: $!";
+    if (defined $arg{'body'}) {
+        open my $fh, '<', $arg{'body'} or die "Can't open body file $arg{'body'}: $!";
         push @body, <$fh>;
     }
     if (@attach) {
@@ -3297,7 +3329,7 @@ EOS
     foreach (@header, @body) {
         chomp;
         $_ .= "\n";
-        $code->();
+        $print->();
     }
 }
 
