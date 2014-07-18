@@ -1445,7 +1445,7 @@ sub cmd_mkhtml {
     print STDERR "Generating output files:\n";
     for ($outhtml, $outmarc) {
         $_ = $predir . '/' . $_;
-        print $_, "\n";
+        print STDERR $_, "\n";
     }
     open my $fh, '-|', @cmd or die "Can't run marc2html: $!";
     $copy->($fh,     $outhtml) or $err->($outhtml);
