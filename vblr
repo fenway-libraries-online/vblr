@@ -1107,6 +1107,7 @@ sub cmd_match {
         'v|verbose' => \$verbose,
         'j|job=s' => \$j,
     ) or usage;
+    ($u, $b) = @ARGV;
     ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
     usage if !defined $u || !defined $b;
     my $udir = "updates/$u";
