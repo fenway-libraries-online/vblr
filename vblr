@@ -1821,7 +1821,15 @@ sub load_batch {
     wrkvfile("$jdir/job.kv", $job);
     wrstatus($jdir, LOADING);
     # Actually load the records!
-    my $err = system(@cmd);
+    my $err;
+    {
+        local $ENV{'VBLR_PROJECT'} = $pcur;
+        local $ENV{'VBLR_UPDATE' } = $u;
+        local $ENV{'VBLR_BATCH'  } = $b;
+        local $ENV{'VBLR_JOB'    } = $j;
+        local $ENV{'VBLR_LOAD_TYPE'} = $load_type;
+        $err = system(@cmd);
+    }
     wrstatus($jdir, FINISHED);
     my $log = "$jdir/output/$j.log";
     my @results = load_results($log);
