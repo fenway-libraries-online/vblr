@@ -1698,7 +1698,16 @@ sub prepare_batch {
     makedir("$prepdir/bin", "$prepdir/conf");
     copy($prep, "$prepdir/bin/prep.used");
     copy($cfile, "$prepdir/conf/prep.kv.used");
-    my $status = system $cmd;
+    my $update = rdupdate($u);
+    my $load_type = $update->{'type'} || ADD;
+    my $status;
+    {
+        local $ENV{'VBLR_PROJECT'} = $pcur;
+        local $ENV{'VBLR_UPDATE' } = $u;
+        local $ENV{'VBLR_BATCH'  } = $b;
+        local $ENV{'VBLR_LOAD_TYPE'} = $load_type;
+        $status = system $cmd;
+    }
     my $result = ERR;
     if ($status == 0) {
         my %marc = marc($out);
