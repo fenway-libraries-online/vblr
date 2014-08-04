@@ -339,7 +339,8 @@ sub add_from_kits {
     my %conf = map { $_->{'#'} => $_ } grep { $_->{'@'} eq 'case' } @conf;
     my @updates;
     foreach my $k (@_) {
-        my $kit = File::Kit->new($k);
+        my $kit = File::Kit->new($k)
+            or fatal "Can't open kit $k";
         my %seq = ( 'numeric' => 1, 'alpha' => 'a' );
         my $dir = $kit->path . '/files';
         foreach my $file ($kit->files) {
@@ -355,9 +356,10 @@ sub add_from_kits {
             my $proto   = $opt{'prototype'}   || $case->{'prototype'};
             my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
             my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
+            my $load_type = $opt{'type'} || $case->{'type'} || $purp;
             push @updates, $u;
-            $opt{'type'} ||= $case->{'type'} || $purp;
             add(
+                'type'        => $load_type,
                 %opt,
                 'file'        => $path,
                 'update'      => $u,
