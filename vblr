@@ -356,13 +356,13 @@ sub add_from_kits {
             my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
             my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
             push @updates, $u;
+            $opt{'type'} ||= $case->{'type'} || $purp;
             add(
                 %opt,
                 'file'        => $path,
                 'update'      => $u,
                 'description' => $descrip,
                 'prototype'   => $proto,
-                'type'        => $opt{'type'}       || $case->{'type'} || $purp,
                 'copy'        => $opt{'copy'}       || bool($case->{'copy'}),
                 'historical'  => $opt{'historical'} || bool($case->{'historical'}),
                 'redo'        => $opt{'redo'}       || bool($case->{'redo'}),
