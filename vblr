@@ -334,11 +334,12 @@ sub cmd_add {
 }
 
 sub add_from_kits {
-    my %opt = %{ shift() };
+    my $opt = shift;
     my @conf = rdkvfile("conf/add.kv");
     my %conf = map { $_->{'#'} => $_ } grep { $_->{'@'} eq 'case' } @conf;
     my @updates;
     foreach my $k (@_) {
+        my %opt = %$opt;
         my $kit = File::Kit->new($k)
             or fatal "Can't open kit $k";
         my %seq = ( 'numeric' => 1, 'alpha' => 'a' );
@@ -356,17 +357,15 @@ sub add_from_kits {
             my $proto   = $opt{'prototype'}   || $case->{'prototype'};
             my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
             my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
-            my $load_type = $opt{'type'} ||= $case->{'type'} || $purp;
+            $opt{'type'} ||= $case->{'type'} || $purp;
             push @updates, $u;
+            $opt{$_} ||= bool($case->{$_}) for qw(copy historical redo);
             add(
                 %opt,
                 'file'        => $path,
                 'update'      => $u,
                 'description' => $descrip,
                 'prototype'   => $proto,
-                'copy'        => $opt{'copy'}       || bool($case->{'copy'}),
-                'historical'  => $opt{'historical'} || bool($case->{'historical'}),
-                'redo'        => $opt{'redo'}       || bool($case->{'redo'}),
             );
             autoload($u, %opt) if $opt{'autoload'};
             $_++ for values %seq;
