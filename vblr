@@ -369,7 +369,7 @@ sub add_from_kits {
                 'historical'  => $opt{'historical'} || bool($case->{'historical'}),
                 'redo'        => $opt{'redo'}       || bool($case->{'redo'}),
             );
-            autoload($u, \%opt) if $opt{'autoload'};
+            autoload($u, %opt) if $opt{'autoload'};
             $_++ for values %seq;
         }
     }
@@ -377,14 +377,14 @@ sub add_from_kits {
 }
 
 sub autoload {
-    my ($u, $opt) = @_;
+    my ($u, %opt) = @_;
     my $b = '1-n';
-    $opt->{'autogen_loaded'} = $opt->{'gen_html'} = 0;  # XXX Really?
-    divide_update($u, $opt, $b);
-    prepare_batch($u, $b, $opt);
-    $opt->{'autogen_loaded'} = $opt->{'gen_html'} = 1;  # XXX Really?
-    $opt->{'delete'} = 1 if $opt->{'type'} eq DELETE;
-    load_batch($u, $b, { %$opt, 'autogen_loaded' => 1, 'gen_html' => 1 });
+    $opt{'autogen_loaded'} = $opt{'gen_html'} = 0;  # XXX Really?
+    divide_update($u, \%opt, $b);
+    prepare_batch($u, $b, %opt);
+    $opt{'autogen_loaded'} = $opt{'gen_html'} = 1;  # XXX Really?
+    $opt{'delete'} = 1 if $opt{'type'} eq DELETE;
+    load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
 
@@ -861,7 +861,7 @@ sub cmd_prep {
         $b = $b[0];
         warning "Assuming you want to prep the next new batch ($b) in update $u";
     }
-    prepare_batch($u, $b, {'verbose' => $verbose, 'dry_run' => $dry_run, 'gen_html' => $gen_html});
+    prepare_batch($u, $b, 'verbose' => $verbose, 'dry_run' => $dry_run, 'gen_html' => $gen_html);
 }
 
 sub cmd_configure {
@@ -900,7 +900,7 @@ sub cmd_load {
         'autogen_loaded' => $autogen_loaded,
         'gen_html'       => $gen_html,
     );
-    load_batch($u, $b, \%opt);
+    load_batch($u, $b, %opt);
 }
 
 sub mkdrops {
@@ -1672,12 +1672,12 @@ sub divide_update {
 }
 
 sub prepare_batch {
-    my ($u, $b, $opt) = @_;
-    my ($verbose, $dry_run, $gen_html) = @$opt{qw(verbose dry_run gen_html)};
+    my ($u, $b, %opt) = @_;
+    my ($verbose, $dry_run, $gen_html) = @opt{qw(verbose dry_run gen_html)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
-    if ($opt->{'verbose'}) {
-        print STDERR "Dry run...\n" if $opt->{'dry_run'};
+    if ($opt{'verbose'}) {
+        print STDERR "Dry run...\n" if $opt{'dry_run'};
         print STDERR "update:  $u\nbatch:   $b\n";
     }
     my $udir = "updates/$u";
@@ -1691,7 +1691,7 @@ sub prepare_batch {
     my $out  = join('/', $bdir, PREPARING, 'records.mrc');
     my $err  = join('/', $bdir, PREPARING, 'prep.err');
     my $cmd  = "marcn -h $b < $in | $prep -c $cfile -u $u -b $b > $out 2> $err";
-    if ($opt->{'dry_run'}) {
+    if ($opt{'dry_run'}) {
         print STDERR "command: $cmd\n";
         return;
     }
@@ -1718,7 +1718,7 @@ sub prepare_batch {
         $expec *= 2 if $marc{'type'} eq BIBMFHD;
         if ($count == $expec) {
             $result = OK;
-            print STDERR "Record prep complete; no errors\n" if $opt->{'verbose'};
+            print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
         }
         else {
             $status = -1;
@@ -1756,7 +1756,7 @@ sub prepare_batch {
     );
     aplast('prep', update => $u, batch => $b);
     apnext('check', update => $u, batch => $b);
-    if ($opt->{'gen_html'}) {
+    if ($opt{'gen_html'}) {
         local @ARGV = ('-z', $u, $b);
         cmd_mkhtml();
     }
@@ -1764,13 +1764,13 @@ sub prepare_batch {
 }
 
 sub load_batch {
-    my ($u, $b, $opt) = @_;
+    my ($u, $b, %opt) = @_;
     my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html)
-        = @$opt{qw(delete verbose dry_run autogen_loaded gen_html)};
+        = @opt{qw(delete verbose dry_run autogen_loaded gen_html)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
-    if ($opt->{'verbose'}) {
-        print STDERR "Dry run...\n" if $opt->{'dry_run'};
+    if ($opt{'verbose'}) {
+        print STDERR "Dry run...\n" if $opt{'dry_run'};
         print "update:  $u\nbatch:   $b\n";
     }
     my $udir = "updates/$u";
@@ -1785,7 +1785,7 @@ sub load_batch {
     my $load_type = $update->{'type'} || ADD;
     my $rec_type = $update->{'marc-type'} || die;
     my @delete;
-    if ($opt->{'delete'} || $load_type eq DELETE) {
+    if ($opt{'delete'} || $load_type eq DELETE) {
         fatal "Deletion of previously loaded records is not yet implemented"
             if $load_type ne DELETE;
         @delete = $interleaved
@@ -1809,14 +1809,14 @@ sub load_batch {
         '-i' => $profile, 
         '-d' => "$jdir/output",
     );
-    push @cmd, '-n' if $opt->{'dry_run'};
+    push @cmd, '-n' if $opt{'dry_run'};
     if (@delete) {
         push @cmd, '-S', '-x', @delete;
     }
     elsif ($interleaved) {
         push @cmd, '-m';
     }
-    if ($opt->{'dry_run'}) {
+    if ($opt{'dry_run'}) {
         print STDERR join(' ', 'command:', @cmd), "\n";
         return;
     }
@@ -1855,7 +1855,7 @@ sub load_batch {
     my $result;
     if ($err == 0) {
         $result = $job->{'result'} = OK;
-        print STDERR "Record load has run\n" if $opt->{'verbose'};
+        print STDERR "Record load has run\n" if $opt{'verbose'};
         wrstatus($jdir, FINISHED);
         wrstatus($bdir, LOADED);
         if (!grep { rdstatus("updates/$u/batches/$_") ne LOADED } batches($u)) {
@@ -1865,7 +1865,7 @@ sub load_batch {
     }
     else {
         $result = $job->{'result'} = ERR;
-        print STDERR "Record load failed\n" if $opt->{'verbose'};
+        print STDERR "Record load failed\n" if $opt{'verbose'};
         wrstatus($jdir, ERROR);
         wrstatus($bdir, ERROR);
     }
@@ -1892,11 +1892,11 @@ sub load_batch {
         aplast('load', update => $u, batch => $b, job => $j);
         apnext('finish', update => $u, batch => $b);
     }
-    if ($opt->{'autogen_loaded'}) {
+    if ($opt{'autogen_loaded'}) {
         open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
         copy($fh, "$jdir/loaded.mrc");
     }
-    if ($opt->{'gen_html'} && $e - $s + 1 <= 5000) {
+    if ($opt{'gen_html'} && $e - $s + 1 <= 5000) {
         local @ARGV = ('-z', '-j' => $j);
         cmd_mkhtml();
     }
