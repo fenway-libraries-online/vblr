@@ -25,7 +25,7 @@ use Text::Glob qw(glob_to_regex);
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
-# Record status and load result
+# Record purpose, status, and load result
 use constant ADD     => 'add';
 use constant DELETE  => 'delete';
 use constant HALFDEL => 'halfdelete';
@@ -269,9 +269,9 @@ sub cmd_init {
 sub cmd_base {
     #@ base [-C] [-m DESCRIP] FILE :: Add the base MARC file for the project
     my ($descrip, $empty, $copy, $historical);
-    my $type = ADD;
+    my $purpose = ADD;
     GetOptions(
-        'x|delete' => sub { $type = DELETE },
+        'x|delete' => sub { $purpose = DELETE },
         'C|copy' => \$copy,
         'E|empty' => sub { $empty = $copy = 1 },
         'm|description=s' => \$descrip,
@@ -281,7 +281,7 @@ sub cmd_base {
     @ARGV = qw(/dev/null) if $empty;
     usage if @ARGV != 1;
     add(
-        'type' => $type,
+        'purpose' => $purpose,
         'update' => 'BASE',
         'file' => $ARGV[0],
         'description' => $descrip,
@@ -301,7 +301,7 @@ sub cmd_add {
                                  usage if !defined $v;
                                  $meta{$k} = $v;
                              },
-        'x|delete'        => sub { $opt{'type'} = DELETE },
+        'x|delete'        => sub { $opt{'purpose'} = DELETE },
         'C|copy'          => \$opt{'copy'},
         'm|description=s' => \$opt{'description'},
         'p|prototype=s'   => \$opt{'prototype'},
@@ -345,23 +345,24 @@ sub add_from_kits {
         my %seq = ( 'numeric' => 1, 'alpha' => 'a' );
         my $dir = $kit->path . '/files';
         foreach my $file ($kit->files) {
-            my $path = $dir . '/' . $file->{'name'};
+            my $name = $file->{'name'};
+            my $path = "$dir/$name";
             if (!-f $path) {
                 print STDERR "Missing file in kit $k: $path\n";
                 next;
             }
             my %ctx = ( 'file' => $file, 'sequence' => \%seq );
-            my $purp = $file->{'purpose'} || ADD;
-            my $case = $conf{$purp} || $conf{'default'}
-                or die "Unrecognized purpose: $purp";
+            my $purp = $file->{'purpose'}
+                or fatal "File has no purpose: $name";
+            my $case    = $conf{$purp};
             my $proto   = $opt{'prototype'}   || $case->{'prototype'};
             my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
             my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
-            $opt{'type'} ||= $case->{'type'} || $purp;
             push @updates, $u;
             $opt{$_} ||= bool($case->{$_}) for qw(copy historical redo);
             add(
                 %opt,
+                'purpose'     => $case->{'purpose'} || $purp,
                 'file'        => $path,
                 'update'      => $u,
                 'description' => $descrip,
@@ -381,7 +382,7 @@ sub autoload {
     divide_update($u, \%opt, $b);
     prepare_batch($u, $b, %opt);
     $opt{'autogen_loaded'} = $opt{'gen_html'} = 1;  # XXX Really?
-    $opt{'delete'} = 1 if $opt{'type'} eq DELETE;
+    $opt{'delete'} = 1 if $opt{'purpose'} eq DELETE;
     load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
@@ -1356,8 +1357,8 @@ sub cmd_mkhtml {
         $u = basename($udir) if $u eq '*';
         $b = basename($bdir) if $b eq '*';
         my $job = rdjob($u, $b, $j);
-        my $load_type = $job->{'load-type'} || ADD;
-        if ($load_type eq DELETE) {
+        my $purpose = $job->{'purpose'} || ADD;
+        if ($purpose eq DELETE) {
             $inmarc = "$inmarcdir/output/$j.delete";
             if (!-e $inmarc) {
                 fatal "No file $j.delete in $inmarcdir/output";
@@ -1555,7 +1556,7 @@ sub cmd_carry {
         }
     });
     #add(
-    #    'type' => $type,
+    #    'purpose' => $purpose,
     #    'update' => $u,
     #    'file' => $file,
     #    'description' => $descrip,
@@ -1699,13 +1700,13 @@ sub prepare_batch {
     copy($prep, "$prepdir/bin/prep.used");
     copy($cfile, "$prepdir/conf/prep.kv.used");
     my $update = rdupdate($u);
-    my $load_type = $update->{'type'} || ADD;
+    my $purpose = $update->{'purpose'} || ADD;
     my $status;
     {
         local $ENV{'VBLR_PROJECT'} = $pcur;
         local $ENV{'VBLR_UPDATE' } = $u;
         local $ENV{'VBLR_BATCH'  } = $b;
-        local $ENV{'VBLR_LOAD_TYPE'} = $load_type;
+        local $ENV{'VBLR_PURPOSE'} = $purpose;
         $status = system $cmd;
     }
     my $result = ERR;
@@ -1780,19 +1781,19 @@ sub load_batch {
     my $conf = rdkvfile($cfile);
     my $interleaved = bool($conf->{'interleaved'});
     my $update = rdupdate($u);
-    my $load_type = $update->{'type'} || ADD;
+    my $purpose = $update->{'purpose'} || ADD;
     my $rec_type = $update->{'marc-type'} || die;
     my @delete;
-    if ($opt{'delete'} || $load_type eq DELETE) {
+    if ($opt{'delete'} || $purpose eq DELETE) {
         fatal "Deletion of previously loaded records is not yet implemented"
-            if $load_type ne DELETE;
+            if $purpose ne DELETE;
         @delete = $interleaved
                     ? 'bh'
                     : $rec_type eq BIB
                         ? 'b'
                         : fatal "Can't delete records of type $rec_type";
     }
-    elsif ($load_type eq DELETE) {
+    elsif ($purpose eq DELETE) {
         fatal "You must always specify -x when doing a load that deletes records";
     }
     my $profile = $conf->{'profile'} || fatal "No load profile configured";
@@ -1824,7 +1825,7 @@ sub load_batch {
         'date' => $now,
         'file' => $file,
         'profile' => $profile,
-        'load-type' => $load_type,
+        'purpose' => $purpose,
         'interleaved' => $interleaved,
     };
     wrkvfile("$jdir/job.kv", $job);
@@ -1836,7 +1837,8 @@ sub load_batch {
         local $ENV{'VBLR_UPDATE' } = $u;
         local $ENV{'VBLR_BATCH'  } = $b;
         local $ENV{'VBLR_JOB'    } = $j;
-        local $ENV{'VBLR_LOAD_TYPE'} = $load_type;
+        local $ENV{'VBLR_PURPOSE'} = $purpose;
+        run_hook('loading', update => $u, batch => $b, job => $j);
         $err = system(@cmd);
     }
     wrstatus($jdir, FINISHED);
@@ -2773,12 +2775,12 @@ sub resolve_update_and_batch {
 
 sub add {
     my %arg = @_;
-    my ($type, $proto, $u, $file, $descrip, $copy, $redo, $meta) = @arg{qw(type prototype update file description copy redo meta)};
+    my ($purpose, $proto, $u, $file, $descrip, $copy, $redo, $meta) = @arg{qw(purpose prototype update file description copy redo meta)};
     # Look at the file
     print STDERR "Checking file $file...\n";
     my %marc = marc($file);
-    if (defined $type) {
-        if ($type eq DELETE) {
+    if (defined $purpose) {
+        if ($purpose eq DELETE) {
             $marc{'status'} eq DELETE || fatal "Deletions must have status d";
         }
         else {
@@ -2786,7 +2788,7 @@ sub add {
         }
     }
     else {
-        $type = ADD;
+        $purpose = ADD;
     }
     my $count  = delete $marc{'count'};
     my $errors = delete $marc{'error-count'};
@@ -2834,7 +2836,7 @@ sub add {
         %{ $meta || {} },
         %update,
         'created' => $now,
-        'type' => $type,
+        'purpose' => $purpose,
         'code' => $u,
         'description' => $descrip,
         'source' => $file,
