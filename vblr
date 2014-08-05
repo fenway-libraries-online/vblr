@@ -382,7 +382,6 @@ sub autoload {
     divide_update($u, \%opt, $b);
     prepare_batch($u, $b, %opt);
     $opt{'autogen_loaded'} = $opt{'gen_html'} = 1;  # XXX Really?
-    $opt{'delete'} = 1 if $opt{'purpose'} eq DELETE;
     load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
@@ -1784,6 +1783,7 @@ sub load_batch {
     my $purpose = $update->{'purpose'} || ADD;
     my $rec_type = $update->{'marc-type'} || die;
     my @delete;
+    $opt{'delete'} = 1 if $purpose eq DELETE;
     if ($opt{'delete'} || $purpose eq DELETE) {
         fatal "Deletion of previously loaded records is not yet implemented"
             if $purpose ne DELETE;
