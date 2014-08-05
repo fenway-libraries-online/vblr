@@ -356,10 +356,9 @@ sub add_from_kits {
             my $proto   = $opt{'prototype'}   || $case->{'prototype'};
             my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
             my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
-            my $load_type = $opt{'type'} || $case->{'type'} || $purp;
+            my $load_type = $opt{'type'} ||= $case->{'type'} || $purp;
             push @updates, $u;
             add(
-                'type'        => $load_type,
                 %opt,
                 'file'        => $path,
                 'update'      => $u,
