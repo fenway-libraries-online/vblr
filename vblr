@@ -258,14 +258,6 @@ sub cmd_init {
     aplog('init', result => OK);
 }
 
-### sub cmd_now {
-###     @ARGV == 1 or usage;
-###     my ($status) = @ARGV;
-###     $status =~ s/^\@?/\@/;
-###     usage if !grep { $_->[0] eq $status } @statuses;
-###     wrstatus('.', $status);
-### }
-
 sub cmd_base {
     #@ base [-C] [-m DESCRIP] FILE :: Add the base MARC file for the project
     my ($descrip, $empty, $copy, $historical);
@@ -378,10 +370,8 @@ sub add_from_kits {
 sub autoload {
     my ($u, %opt) = @_;
     my $b = '1-n';
-    $opt{'autogen_loaded'} = $opt{'gen_html'} = 0;  # XXX Really?
     divide_update($u, \%opt, $b);
     prepare_batch($u, $b, %opt);
-    $opt{'autogen_loaded'} = $opt{'gen_html'} = 1;  # XXX Really?
     load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
