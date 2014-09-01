@@ -669,7 +669,7 @@ sub cmd_close {
     wrstatus('.', CLOSED);
     aplog('close', defined $comment ? ('comment' => $comment) : ());
     aplast('close');
-    run_hook('close');
+    run_hook('closed');
 }
 
 sub cmd_finish {
@@ -683,7 +683,7 @@ sub cmd_finish {
         wrstatus('.', FINISHED);
         aplog('finish');
         aplast('finish');
-        run_hook('finish');
+        run_hook('finished');
     }
     else {
         my ($u, $b) = resolve_update_and_batch(@ARGV);
@@ -692,7 +692,7 @@ sub cmd_finish {
                 wrstatus("updates/$u/batches/$b", FINISHED);
                 aplog('finish', 'update' => $u, 'batch' => $b);
                 aplast('finish', 'update' => $u, 'batch' => $b);
-                run_hook('finish');
+                run_hook('finished');
             }
             else {
                 finish_update($u);
@@ -1656,7 +1656,7 @@ sub divide_update {
         print STDERR "batch $b\n" if $opt->{'verbose'};
         mkbatch($u, $b) if !$opt->{'dry_run'};
     }
-    run_hook('divide', update => $u) if !$opt->{'dry_run'};
+    run_hook('divided', update => $u) if !$opt->{'dry_run'};
 }
 
 sub prepare_batch {
@@ -1748,7 +1748,7 @@ sub prepare_batch {
         local @ARGV = ('-z', $u, $b);
         cmd_mkhtml();
     }
-    run_hook('prep', update => $u, batch => $b);
+    run_hook('prepared', update => $u, batch => $b);
 }
 
 sub load_batch {
@@ -1915,7 +1915,7 @@ sub finish_update {
     }
     aplog('finish', 'update' => $u);
     aplast('finish', 'update' => $u);
-    run_hook('finish');
+    run_hook('finished');
 }
 
 sub notify {
