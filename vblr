@@ -1691,35 +1691,37 @@ sub prepare_batch {
     my $update = rdupdate($u);
     my $purpose = $update->{'purpose'} || ADD;
     my $status;
+    my $result = ERR;
     {
         local $ENV{'VBLR_PROJECT'} = $pcur;
         local $ENV{'VBLR_UPDATE' } = $u;
         local $ENV{'VBLR_BATCH'  } = $b;
         local $ENV{'VBLR_PURPOSE'} = $purpose;
-        $status = system $cmd;
-    }
-    my $result = ERR;
-    if ($status == 0) {
-        my %marc = marc($out);
-        my $count = $marc{'count'};
-        my $expec = $e - $s + 1;
-        $expec *= 2 if $marc{'type'} eq BIBMFHD;
-        if ($count == $expec) {
-            $result = OK;
-            print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
+        if (($status = system $cmd) != 0) {
+            print STDERR "Record prep failed; stderr follows\n";
+        }
+        elsif (($status = system(qw(marcdiag -s -q), $out)) != 0) {
+            print STDERR "Record prep produced an invalid file\n";
         }
         else {
-            $status = -1;
-            if ($count == 0) {
-                print STDERR "Record prep failed silently without producing any records\n";
+            my %marc = marc($out);
+            my $count = $marc{'count'};
+            my $expec = $e - $s + 1;
+            $expec *= 2 if $marc{'type'} eq BIBMFHD;
+            if ($count == $expec) {
+                $result = OK;
+                print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
             }
             else {
-                print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+                $status = -1;
+                if ($count == 0) {
+                    print STDERR "Record prep failed silently without producing any records\n";
+                }
+                else {
+                    print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+                }
             }
         }
-    }
-    else {
-        print STDERR "Record prep failed; stderr follows\n";
     }
     if ($result eq ERR) {
         unlink $out if ! -s $out;
