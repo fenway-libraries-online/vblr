@@ -3265,23 +3265,35 @@ sub makemail {
             $header = <$fh>;
             chomp $header;
         }
-        @body = map {
+        my ($skip);
+        while (<$fh>) {
             chomp;
-            if (/^!##/) {
-                ;
+            next if /^!##/;
+            if (/^!--\s*end$/) {
+                $skip = 0;
             }
-            elsif (s/^!<<\s*(?=\S)//) {
+            elsif (/^!--\s*else$/) {
+                $skip = !$skip;
+            }
+            elsif ($skip) {
+                # Skip it (duh!)
+            }
+            elsif (/^!--if\s+(%\(.+\))$/) {
+                my $val = $expando->expand($1, \%arg);
+                $skip = !length $val;
+            }
+            elsif (s/^!(?:--\s*attach\s+|<<\s*)(?=\S)//) {
                 my $f = find_attachment($expando->expand($_, \%arg), @$attdirs);
                 open my $fhatt, '<', $f
                     or fatal "Can't open file $f for inclusion: $!";
                 my @lines = <$fhatt>;
                 chomp @lines;
-                @lines;
+                push @body, @lines;
             }
             else {
-                $expando->expand($_, \%arg);
+                push @body, $expando->expand($_, \%arg);
             }
-        } <$fh>;
+        }
         close $fh;
     }
     else {
