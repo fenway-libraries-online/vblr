@@ -288,6 +288,7 @@ sub cmd_add {
     GetOptions(
         'k|from-kits'     => \$opt{'kits'},
         'L|auto-load'     => \$opt{'autoload'},
+        'debug' => \$opt{'debug'},
         'D|define=s'      => sub {
                                  my ($k, $v) = split /=/, $_[1], 2;
                                  usage if !defined $v;
@@ -372,6 +373,7 @@ sub autoload {
     my $b = '1-n';
     divide_update($u, \%opt, $b);
     prepare_batch($u, $b, %opt);
+    return if $opt{'debug'};
     load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
@@ -653,6 +655,15 @@ sub cmd_status {
 }
 
 sub cmd_fin { goto &cmd_finish }
+
+sub cmd_onhold {
+    my $comment;
+    GetOptions( 'm|comment=s' => \$comment ) or usage;
+    wrstatus('.', ONHOLD);
+    aplog('onhold', defined $comment ? ('comment' => $comment) : ());
+    aplast('onhold');
+    run_hook('onhold');
+}
 
 sub cmd_idle {
     my $comment;
@@ -1118,7 +1129,8 @@ sub cmd_match {
     open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
         or fatal "Can't run vbirule: $!";
     my @actions = map { split /\s+/ } <$fh1>;
-    open my $fh2, '-|', 'vmatch', '-p' => $profile, '-f' => $files[0],
+    my ($warn, $replace, @params) = split /\s/, qx/vmatchparams $profile/;
+    open my $fh2, '-|', qw(vmatch -P -H), '-w' => $warn, '-r' => $replace, '-f' => $files[0], @params
         or fatal "Can't run vmatch: $!";
     local $/ = '';
     while (<$fh2>) {
