@@ -1125,6 +1125,7 @@ sub cmd_match {
     my $conf = rdkvfile($cfile);
     my $profile = $conf->{'profile'} || fatal "No load profile configured";
     my $rectype = $update->{'marc-type'} || die;
+    $rectype = BIBMFHD if $conf->{'interleaved'};
     my @delete  = $update->{'delete'} ? qw(-x) : qw();
     open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
         or fatal "Can't run vbirule: $!";
