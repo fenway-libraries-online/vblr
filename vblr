@@ -779,6 +779,22 @@ sub cmd_batches {
     print $_, "\n" for batches($u);
 }
 
+sub cmd_archive {
+    if (@ARGV == 0) {
+        my $pstat = rdstatus('.');
+        fatal "Can't archive an active project"
+            if $pstat ne FINISHED && $pstat ne CLOSED;
+        archive_project();
+    }
+    elsif (@ARGV == 1) {
+        my ($u) = @ARGV;
+        my $ustat = rdstatus($u);
+        fatal "Can't archive an active update"
+            if $ustat ne FINISHED;
+        archive_update($u);
+    }
+}
+
 sub cmd_rm {
     #@ rm [-f] UPDATE BATCH
     my ($force, $u, $b, $j);
@@ -2031,6 +2047,12 @@ sub update_summary {
     return %num;
 }
 
+sub archive_project {
+}
+
+sub archive_update {
+}
+
 sub run_hook {
     my ($hook, %arg) = @_;
     my @where = ($pdir);
@@ -2792,9 +2814,6 @@ sub add {
             $marc{'status'} ne DELETE || fatal "Additions must not have status d";
         }
     }
-    else {
-        $purpose = ADD;
-    }
     my $count  = delete $marc{'count'};
     my $errors = delete $marc{'error-count'};
     if ($errors) {
@@ -2835,8 +2854,11 @@ sub add {
         my $prodir = "prototypes/$proto";
         copy_bin($prodir, $udir)  if -d "$prodir/bin";
         copy_conf($prodir, $udir) if -d "$prodir/conf";
-        %update = ( %{ rdkvfile("$prodir/update.kv") }, 'prototype' => $proto );
+        my %proto = %{ rdkvfile("$prodir/update.kv") };
+        %update = ( %proto, 'prototype' => $proto );
+        $purpose ||= $proto{'purpose'};
     }
+    $purpose ||= ADD;
     %update = (
         %{ $meta || {} },
         %update,
