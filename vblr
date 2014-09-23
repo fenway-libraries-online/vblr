@@ -394,9 +394,9 @@ sub cmd_note {
         'j|job=s' => \$j,
     ) or usage;
     ($u, $b) = @ARGV;
-    ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
     my $file;
     if (defined $j) {
+        ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
         $file = "updates/$u/batches/$b/jobs/$j/job.kv";
     }
     elsif (defined $b) {
