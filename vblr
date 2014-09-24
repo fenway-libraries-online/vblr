@@ -795,8 +795,38 @@ sub cmd_archive {
     }
 }
 
+sub remove_job {
+    my ($u, $b, $j) = @_;
+    my $dir = "updates/$u/batches/$b/jobs";
+    wrlist($dir, grep { $_ ne $j } rdlist($dir));
+    system('rm', '-Rf', "$dir/$j");
+    run_hook('removed', update => $u, batch => $b, job => $j);
+}
+
+sub remove_batch {
+    my ($u, $b) = @_;
+    foreach my $j (jobs($u, $b)) {
+        remove_job($u, $b, $j);
+    }
+    my $dir = "updates/$u/batches";
+    wrlist($dir, grep { $_ ne $b } rdlist($dir));
+    system('rm', '-Rf', "$dir/$b");
+    run_hook('removed', update => $u, batch => $b);
+}
+
+sub remove_update {
+    my ($u) = @_;
+    foreach my $b (batches($u)) {
+        remove_batch($u, $b);
+    }
+    my $dir = 'updates';
+    wrlist($dir, grep { $_ ne $u } rdlist($dir));
+    system('rm', '-Rf', "$dir/$u");
+    run_hook('removed', update => $u);
+}
+
 sub cmd_rm {
-    #@ rm [-f] UPDATE BATCH
+    #@ rm [-f] UPDATE [BATCH [JOB]]
     my ($force, $u, $b, $j);
     GetOptions(
         'f|force' => \$force,
@@ -804,33 +834,27 @@ sub cmd_rm {
     ) or usage;
     ($u, $b) = @ARGV;
     ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
+    fatal "Projects can't be removed" if !defined $u;
+    my ($t, $o, $dir)
+        = $j ? ('job'    => $j, "updates/$u/batches/$b/jobs")
+        : $b ? ('batch'  => $b, "updates/$u/batches")
+        :      ('update' => $u, 'updates')
+        ;
+    my $status = rdstatus("$dir/$o");
+    fatal "Can't remove $t $o: status"
+        if $status ne NEW
+        && $status ne ERROR
+        && $status ne PREPARED
+        && !$force;
+    $force or askbool "Delete $t $o? " or fatal 'Cancelled';
     if (defined $j) {
-        my $dir = "updates/$u/batches/$b/jobs";
-        my $status = rdstatus("$dir/$j");
-        fatal "Can't delete job $j: status"
-            if $status ne ERROR
-                && !$force;
-        $force or askbool "Delete job $j in batch $b of update $u? " or fatal 'Cancelled';
-        wrlist($dir, grep { $_ ne $j } rdlist($dir));
-        system('rm', '-Rf', "$dir/$j");
-        run_hook('removed', update => $u, batch => $b, job => $j);
+        remove_job($u, $b, $j);
     }
     elsif (defined $b) {
-        my $dir = "updates/$u/batches";
-        my $status = rdstatus("$dir/$b");
-        fatal "Can't delete batch $b: status"
-            if $status ne NEW
-            && $status ne PREPARED;
-        $force or askbool "Delete batch $b of update $u? " or fatal 'Cancelled';
-        wrlist($dir, grep { $_ ne $b } rdlist($dir));
-        system('rm', '-Rf', "$dir/$b");
-        run_hook('removed', update => $u, batch => $b);
+        remove_batch($u, $b);
     }
     elsif (defined $u) {
-        fatal "Sorry, I can't delete a whole update";
-    }
-    else {
-        fatal "Sorry, I can't delete a project";
+        remove_update($u);
     }
 }
 
@@ -3489,3 +3513,4 @@ sub expando_decoder {
     return $val;
 }
 
+# vim:set nu:
