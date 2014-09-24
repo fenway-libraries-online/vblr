@@ -800,6 +800,11 @@ sub remove_job {
     my $dir = "updates/$u/batches/$b/jobs";
     wrlist($dir, grep { $_ ne $j } rdlist($dir));
     system('rm', '-Rf', "$dir/$j");
+    aplog('remove',
+        'update' => $u,
+        'batch' => $b,
+        'job' => $j,
+    );
     run_hook('removed', update => $u, batch => $b, job => $j);
 }
 
@@ -811,6 +816,10 @@ sub remove_batch {
     my $dir = "updates/$u/batches";
     wrlist($dir, grep { $_ ne $b } rdlist($dir));
     system('rm', '-Rf', "$dir/$b");
+    aplog('remove',
+        'update' => $u,
+        'batch' => $b,
+    );
     run_hook('removed', update => $u, batch => $b);
 }
 
@@ -822,6 +831,9 @@ sub remove_update {
     my $dir = 'updates';
     wrlist($dir, grep { $_ ne $u } rdlist($dir));
     system('rm', '-Rf', "$dir/$u");
+    aplog('remove',
+        'update' => $u,
+    );
     run_hook('removed', update => $u);
 }
 
@@ -989,6 +1001,7 @@ sub resolve_update_batch_and_job {
         return ( basename($udir), basename($bdir), basename($jdir) );
     }
     else {
+        return $u if !defined $b;
         ($u, $b) = resolve_update_and_batch($u, $b);
         fatal "Can't resolve batch" if !defined $b;
         return ( $u, $b, map { basename($_) } dirs("updates/$u/batches/$b/jobs/*") );
@@ -2785,6 +2798,9 @@ sub resolve_update_and_batch {
             return ($ucur, $b) if $b ne '.';
             fatal "Not in a batch directory" if !defined $bcur;
             return ($ucur, $bcur);
+        }
+        elsif (!defined $b) {
+            return;
         }
         elsif ($b eq '.') {
             # vblr foo BASE .
