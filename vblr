@@ -2872,7 +2872,7 @@ sub add {
         -d 'updates/BASE' || fatal "You must add the project base first";
     }
     makedir('updates', $udir);
-    makedir("$udir/batches") if !$arg{'historical'};
+    makedir("$udir/batches");
     # Ingest the file of MARC records
     $file = File::Spec->rel2abs($file);
     my $filename = basename(clean_filename($file));
@@ -2920,6 +2920,7 @@ sub add {
     aplist('updates', $u);
     if ($arg{'historical'}) {
         wrstatus($udir, FINISHED);
+        aplist("$udir/batches");  # Empty list = no batches
     }
     else {
         wrstatus('.', INPROCESS);
