@@ -1786,25 +1786,23 @@ sub prepare_batch {
                 $result = OK;
                 print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
             }
+            elsif ($count == 0) {
+                print STDERR "Record prep failed silently without producing any records\n";
+                $status = -1;
+            }
             else {
-                if ($count == 0) {
-                    print STDERR "Record prep failed silently without producing any records\n";
-                    $status = -1;
+                print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+                if ($opt{'force'}) {
+                    $result = OK;
+                    my $batch = rdbatch($u, $b);
+                    if ($batch->{'count'} != $count) {
+                        print STDERR "Batch count adjusted\n";
+                        $batch->{'count'} = $count;
+                        wrbatch($u, $b, $batch);
+                    }
                 }
                 else {
-                    print STDERR "Record prep dropped some records: expected $expec, got $count\n";
-                    if ($opt{'force'}) {
-                        $result = OK;
-                        my $batch = rdbatch($u, $b);
-                        if ($batch->{'count'} != $count) {
-                            print STDERR "Batch count adjusted\n";
-                            $batch->{'count'} = $count;
-                            wrbatch($u, $b, $batch);
-                        }
-                    }
-                    else {
-                        $status = -1;
-                    }
+                    $status = -1;
                 }
             }
         }
