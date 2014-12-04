@@ -896,10 +896,12 @@ sub cmd_divide {
 
 sub cmd_prep {
     #@ prep [-v] [UPDATE [RANGE]] :: Prepare records for loading
-    my ($gen_html, $verbose, $dry_run);
+    my ($gen_html, $verbose, $dry_run, $force, $expec);
     GetOptions(
         'v|verbose' => \$verbose,
         'n|dry-run' => \$dry_run,
+        'f|force' => \$force,
+        'e|expected=i' => \$expec,
         'h|html' => \$gen_html,
     ) or usage;
     $verbose = 1 if $dry_run;
@@ -912,7 +914,13 @@ sub cmd_prep {
         $b = $b[0];
         warning "Assuming you want to prep the next new batch ($b) in update $u";
     }
-    prepare_batch($u, $b, 'verbose' => $verbose, 'dry_run' => $dry_run, 'gen_html' => $gen_html);
+    prepare_batch($u, $b,
+        'verbose' => $verbose,
+        'dry_run' => $dry_run,
+        'gen_html' => $gen_html,
+        'force' => $force,
+        'expected' => $expec,
+    );
 }
 
 sub cmd_configure {
@@ -1727,7 +1735,7 @@ sub divide_update {
 
 sub prepare_batch {
     my ($u, $b, %opt) = @_;
-    my ($verbose, $dry_run, $gen_html) = @opt{qw(verbose dry_run gen_html)};
+    my ($verbose, $dry_run, $expec, $gen_html) = @opt{qw(verbose dry_run expected gen_html)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
     if ($opt{'verbose'}) {
@@ -1772,19 +1780,31 @@ sub prepare_batch {
         else {
             my %marc = marc($out);
             my $count = $marc{'count'};
-            my $expec = $e - $s + 1;
+            $expec = $e - $s + 1 if !defined $expec;
             $expec *= 2 if $marc{'type'} eq BIBMFHD;
             if ($count == $expec) {
                 $result = OK;
                 print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
             }
             else {
-                $status = -1;
                 if ($count == 0) {
                     print STDERR "Record prep failed silently without producing any records\n";
+                    $status = -1;
                 }
                 else {
                     print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+                    if ($opt{'force'}) {
+                        $result = OK;
+                        my $batch = rdbatch($u, $b);
+                        if ($batch->{'count'} != $count) {
+                            print STDERR "Batch count adjusted\n";
+                            $batch->{'count'} = $count;
+                            wrbatch($u, $b, $batch);
+                        }
+                    }
+                    else {
+                        $status = -1;
+                    }
                 }
             }
         }
