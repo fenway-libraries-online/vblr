@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.002);
+$VERSION = q(1.009);
 
 use String::Expando;
 use File::Kvpar;
@@ -921,6 +921,42 @@ sub cmd_prep {
         'force' => $force,
         'expected' => $expec,
     );
+}
+
+sub cmd_last {
+    #@ last [COUNT] update|batch|job [UPDATE [BATCH]]
+    my $verbose;
+    GetOptions(
+        'v|verbose' => \$verbose,
+    ) or usage;
+    usage if !@ARGV;
+    my $t = shift @ARGV;
+    my $n = 1;
+    if ($t =~ /^[1-9][0-9]*$/) {
+        usage if !@ARGV;
+        ($n, $t) = ($t, shift @ARGV);
+    }
+    my (@last, @keys);
+    if ($t =~ /^updates?$/i) {
+        @last = grep { $_->{'verb'} eq 'add' } rdlog();
+        @keys = qw(update);
+    }
+    elsif ($t =~ /^batch(?:es)?$/i) {
+        @last = grep { $_->{'verb'} eq 'prep' } rdlog();
+        @keys = qw(update batch);
+    }
+    elsif ($t =~ /^jobs?$/i) {
+        @last = grep { $_->{'verb'} eq 'load' } rdlog();
+        @keys = qw(update batch job);
+    }
+    else {
+        usage;
+    }
+    @keys = ( $keys[-1] ) if !$verbose;
+    @last = @last[-$n..-1];
+    foreach my $event (@last) {
+        print join(' ', map { $event->{$_} } @keys), "\n";
+    }
 }
 
 sub cmd_configure {
