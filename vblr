@@ -1702,6 +1702,39 @@ sub cmd_notify {
     notify(\%conf, @ARGV);
 }
 
+sub cmd_sets {
+    my $verbose;
+    GetOptions(
+        'v|verbose' => \$verbose,
+    ) or usage;
+    my @sets = sets();
+    if ($verbose && !@sets) {
+        print STDERR "No sets defined\n";
+    }
+    elsif ($verbose) {
+        foreach my $s (@sets) {
+            my $set = rdset($s);
+            my $descrip = $set->{'description'} || '[no description]';
+            printf "%-12.12s %s\n", $s, $descrip;
+        }
+    }
+    else {
+        print $_, "\n" for @sets;
+    }
+}
+
+sub cmd_enum {
+    my %opt;
+    GetOptions(
+        'c|use-cache' => \$opt{'use_cache'},
+        'f|fill-cache' => \$opt{'fill_cache'},
+    ) or usage;
+    @ARGV == 1 or usage;
+    my ($s) = @ARGV;
+    my $fh = set_enumerator($s, %opt);
+    copy($fh, \*STDOUT);
+}
+
 # --- Other functions
 
 sub warning {
@@ -2592,6 +2625,10 @@ sub jobs {
     return @j;
 }
 
+sub sets {
+    rdlist('sets');
+}
+
 sub rdproject {
     rdkvfile('project.kv');
 }
@@ -2648,6 +2685,53 @@ sub rdstatus {
         return $_ if exists $status{$_} && exists $status2abbrev{$_};
     }
     return UNKNOWN;
+}
+
+sub mkset {
+    my ($s) = @_;
+    $s = mkid('s') if !defined $s;
+    makedir('sets', "sets/$s");
+}
+
+sub rdset {
+    my ($s) = @_;
+    rdkvfile("sets/$s/set.kv");
+}
+
+sub wrset {
+    my ($s, $kv) = @_;
+    wrkvfile("sets/$s/set.kv", $kv);
+}
+
+sub set_enumerator {
+    my ($s, %opt) = @_;
+    my $sdir = "sets/$s";
+    my $set = rdset($s);
+    my $fh;
+    if ($set->{'frozen'} || ($opt{'use_cache'} && -e "$sdir/cached.mrc")) {
+        open $fh, '<', "$sdir/cached.mrc" or die "Can't open $sdir/cached.mrc: $!";
+    }
+    else {
+        my ($exec) = grep { -x && !-d _ } files("$sdir/bin/enum", 'bin/enum');
+        my $cmd;
+        if ($exec) {
+            $cmd = -e "$sdir/records.list"
+                       ? "$exec $s < $sdir/records.list"
+                       : "$exec $s"
+                       ;
+        }
+        elsif (-e "$sdir/records.list" && -e "$sdir/source.mrc") {
+            $cmd = $opt{'fill_cache'}
+                       ? "marcn -f $sdir/records.list < $sdir/source.mrc | xee $sdir/cached.mrc.gz gzip"
+                       : "marcn -f $sdir/records.list < $sdir/source.mrc"
+                       ;
+        }
+        else {
+            die "Can't enumerate set $s";
+        }
+        open $fh, '-|', $cmd or die "Can't extract set members from $sdir/source.mrc: $!";
+    }
+    return $fh;
 }
 
 sub wrstatus {
