@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.009);
+$VERSION = q(1.015);
 
 use String::Expando;
 use File::Kvpar;
@@ -1421,16 +1421,17 @@ sub cmd_log {
 }
 
 sub cmd_mkhtml {
-    #@ mkhtml [-nzig] [-j JOB] [-m DESCRIP] [-o PATH] [-s URL] [UPDATE [BATCH]] :: Make a web page showing records
+    #@ mkhtml [-nzig] [-j JOB | -S SET] [-m DESCRIP] [-o PATH] [-s URL] [UPDATE [BATCH]] :: Make a web page showing records
     my $www = rdkvfile("$root/conf/www.kv");
     my $www_root = $www->{'file-root'};
     my $url_base = $www->{'url-base'};
-    my $j;
+    my ($j, $s);
     my ($dry_run, $title, $description, $inmarc, $outhtml, $outmarc, $link001, $autogen, $gzip);
     my @stylesheets;
     GetOptions(
         'n'   => \$dry_run,
         'j=s' => \$j,
+        'S=s' => \$s,
         't=s' => \$title,
         'm=s' => \$description,
         'o=s' => \$outhtml,
@@ -1444,7 +1445,14 @@ sub cmd_mkhtml {
     my $code = $project->{'code'};
     my @links;
     my $first = 1;
-    if (defined $j) {
+    if (defined $s) {
+        my $sdir = "sets/$s";
+        fatal "No such set: $s" if !-d $sdir;
+        push @links, rdlinks($sdir);
+        my $set = rdset($s);
+        $description = $set->{'description'} || "Records in set $s";
+    }
+    elsif (defined $j) {
         $link001 = 1;
         $b = '*' if !defined $b;
         $u = '*' if !defined $u;
@@ -1728,11 +1736,24 @@ sub cmd_enum {
     GetOptions(
         'c|use-cache' => \$opt{'use_cache'},
         'f|fill-cache' => \$opt{'fill_cache'},
+        'n|identifiers-only' => \$opt{'identifiers_only'},
     ) or usage;
     @ARGV == 1 or usage;
     my ($s) = @ARGV;
     my $fh = set_enumerator($s, %opt);
     copy($fh, \*STDOUT);
+}
+
+sub cmd_mkset {
+    #@ mkset NAME 
+    usage if !@ARGV;
+    my $s = shift @ARGV;
+    my %set;
+    foreach (@ARGV) {
+        my ($key, $val) = split /=/, $_, 2;
+        $set{$key} = $val if defined $val;
+    }
+    wrset($s, \%set);
 }
 
 # --- Other functions
@@ -2700,36 +2721,49 @@ sub rdset {
 
 sub wrset {
     my ($s, $kv) = @_;
+    makedir("sets/$s");
     wrkvfile("sets/$s/set.kv", $kv);
 }
 
 sub set_enumerator {
     my ($s, %opt) = @_;
+    my $sq = quotemeta $s;
+    my $sdirq = quotemeta $s;
     my $sdir = "sets/$s";
     my $set = rdset($s);
     my $fh;
-    if ($set->{'frozen'} || ($opt{'use_cache'} && -e "$sdir/cached.mrc")) {
-        open $fh, '<', "$sdir/cached.mrc" or die "Can't open $sdir/cached.mrc: $!";
-    }
-    else {
-        my ($exec) = grep { -x && !-d _ } files("$sdir/bin/enum", 'bin/enum');
-        my $cmd;
-        if ($exec) {
-            $cmd = -e "$sdir/records.list"
-                       ? "$exec $s < $sdir/records.list"
-                       : "$exec $s"
-                       ;
-        }
-        elsif (-e "$sdir/records.list" && -e "$sdir/source.mrc") {
-            $cmd = $opt{'fill_cache'}
-                       ? "marcn -f $sdir/records.list < $sdir/source.mrc | xee $sdir/cached.mrc.gz gzip"
-                       : "marcn -f $sdir/records.list < $sdir/source.mrc"
-                       ;
+    if ($opt{'identifiers_only'}) {
+        if (-e "$sdir/records.list" && ($opt{'use_cache'} || $set->{'frozen'})) {
+            open $fh, '<', "$sdir/records.list" or die;
         }
         else {
-            die "Can't enumerate set $s";
+            my ($exec) = grep { -x && !-d _ } files("$sdir/bin/enum", 'bin/enum');
+            my $cmd = "$exec -n $sq | tee sets/$sdirq/records.list";
+            open $fh, '-|', $cmd or die;
         }
-        open $fh, '-|', $cmd or die "Can't extract set members from $sdir/source.mrc: $!";
+    }
+    else {
+        if ($set->{'frozen'} || ($opt{'use_cache'} && -e "$sdir/cached.mrc")) {
+            open $fh, '<', "$sdir/cached.mrc" or die "Can't open $sdir/cached.mrc: $!";
+        }
+        else {
+            my ($exec) = grep { -x && !-d _ } files("$sdir/bin/enum", 'bin/enum');
+            my $cmd;
+            if ($exec) {
+                $cmd = -e "$sdir/records.list"
+                        ? "$exec $sq < sets/$sdirq/records.list"
+                        : "$exec $sq"
+                        ;
+            }
+            elsif (-e "$sdir/records.list" && -e "$sdir/source.mrc") {
+                $cmd = "marcn -f sets/$sdirq/records.list < sets/$sdirq/source.mrc";
+            }
+            else {
+                die "Can't enumerate set $s";
+            }
+            $cmd .= " | tee sets/$sdirq/cached.mrc" if $opt{'fill_cache'};
+            open $fh, '-|', $cmd or die "Can't extract set members from $sdir/source.mrc: $!";
+        }
     }
     return $fh;
 }
@@ -3667,6 +3701,13 @@ sub expando_decoder {
     my $val = $stash->{$code};
     $val = $val->($stash) if ref($val) eq 'CODE';
     return $val;
+}
+
+sub mtime {
+    my ($f) = @_;
+    my @stat = stat $f;
+    die "Can't stat $f: $!" if !@stat;
+    return $stat[9];
 }
 
 # vim:set nu:
