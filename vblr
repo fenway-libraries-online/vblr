@@ -1053,8 +1053,9 @@ sub resolve_update_batch_and_job {
 }
 
 sub cmd_results {
-    #@ results [-vj] UPDATE [BATCH] | JOB... :: Show detailed load results
+    #@ results [-v] [UPDATE [BATCH] | -L | -j JOB...] :: Show record load results
     my ($verbose, $jobs, %tally);
+    @ARGV = qw(-L) if !@ARGV;
     GetOptions(
         'v|verbose' => \$verbose,
         'j|jobs' => \$jobs,
