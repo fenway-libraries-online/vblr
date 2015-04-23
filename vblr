@@ -1058,6 +1058,7 @@ sub cmd_results {
     GetOptions(
         'v|verbose' => \$verbose,
         'j|jobs' => \$jobs,
+        'L' => sub { push @ARGV, '-j', 'last' },
         't|tally=s' => sub {
             my ($type, $action) = split /:/, $_[1];
             $action = '*' if !defined $action;
@@ -1068,7 +1069,8 @@ sub cmd_results {
     if ($jobs) {
         # vblr results -j JOBID...
         foreach my $j (@ARGV) {
-            my ($u, $b) = job_update_and_batch(@ARGV);
+            $j = (jobs())[-1] if $j eq 'last';
+            my ($u, $b) = job_update_and_batch($j);
             push @jobs, [ $u, $b, $j ];
         }
     }
@@ -1584,7 +1586,8 @@ sub cmd_drops {
     if ($jobs) {
         # vblr drops -j JOBID...
         foreach my $j (@ARGV) {
-            my ($u, $b) = job_update_and_batch(@ARGV);
+            $j = (jobs())[-1] if $j eq 'last';
+            my ($u, $b) = job_update_and_batch($j);
             push @jobs, [ $u, $b, $j ];
         }
     }
