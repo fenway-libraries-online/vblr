@@ -22,6 +22,7 @@ use MIME::Base64;
 use YAML;
 use IO::Handle;
 use Text::Glob qw(glob_to_regex);
+use DB_File;
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
@@ -176,7 +177,8 @@ GetOptions(
     'p|project=s' => \$pdir,
 ) or usage_commands;
 
-my %skip_orient = map { $_ => 1 } qw( init help projects groups www );
+my %skip_orient = map { $_ => 1 } qw( init help projects groups www iddb );
+my %iddb;
 
 my $cmd = shift @ARGV;
 my $sub = __PACKAGE__->can("cmd_$cmd") || usage_commands;
@@ -229,8 +231,10 @@ sub cmd_init {
     fatal "Not a prototype: $proto" if ! -e "$proto_dir/prototype.kv";
     ask $descrip, 'Project description: ' if !defined $descrip;
     ask $freq,    'Project frequency: ';
-    my $id = mkid('p');
-    symlink "$root/$pcode", "$root/id/$id";
+    my $pid;
+    do { $pid = mkid('p') } while defined idval($pid);
+    idval($pid => "$pcode");
+    symlink "$root/$pcode", "$root/id/$pid";
     $project = {
         'code' => $pcode,
         'created' => $now,
@@ -238,7 +242,7 @@ sub cmd_init {
         'record-set' => $recset,
         'description' => $descrip,
         'prototype' => $proto,
-        'id' => $id,
+        'id' => $pid,
         'frequency' => $freq,
     };
     # Copy files from prototype
@@ -2300,7 +2304,34 @@ sub mkid {
     return $char . substr(randhex(), 0, 9);
 }
 
-sub mkjobid { mkid('j') }
+sub idkeys {
+    if (!tied %iddb) {
+        tie %iddb, 'DB_File', "$root/ids.db", O_RDWR|O_CREAT, 0666, $DB_HASH
+            or die "Can't open jobs DB: $!";
+    }
+    return keys %iddb if !@_;
+    my $want = join('', @_);
+    my $rxwant = qr/^[$want]/;
+    return grep { $_ =~ $rxwant } keys %iddb;
+}
+
+sub idval {
+    if (!tied %iddb) {
+        tie %iddb, 'DB_File', "$root/ids.db", O_RDWR|O_CREAT, 0666, $DB_HASH
+            or die "Can't open jobs DB: $!";
+    }
+    return if !@_;
+    my $id = shift;
+    return $iddb{$id} if !@_;
+    return $iddb{$id} = shift if @_ == 1;
+    die "WTF?!";
+}
+
+sub mkjobid {
+    my $j;
+    do { $j = mkid('j') } while defined idval($j);
+    return $j;
+}
 
 sub cmp_batches_by_range {
     my ($ab, $ae) = (@$a{qw(begin end)});
@@ -2499,9 +2530,9 @@ sub orient {
     }
     $project = rdproject();
     if (!$project->{'id'}) {
-        my $id = $project->{'id'} = randhex();
+        my $pid = $project->{'id'} = randhex();
         wrproject($project);
-        symlink getcwd, "$root/id/$id";
+        symlink getcwd, "$root/id/$pid";
     }
     $project->{'group'} = $gcur if !$project->{'group'};
     if (! -e 'vblr.kv') {
@@ -2569,14 +2600,14 @@ sub aplog {
 
 sub aplast {
     my $action = shift;
-    my $id = $project->{'id'};
-    apline("$root/last.log", "$now $id $action", {@_});
+    my $pid = $project->{'id'};
+    apline("$root/last.log", "$now $pid $action", {@_});
 }
 
 sub apnext {
     my $action = shift;
-    my $id = $project->{'id'};
-    apline("$root/next.log", "$now $id $action", {@_});
+    my $pid = $project->{'id'};
+    apline("$root/next.log", "$now $pid $action", {@_});
 }
 
 sub rdkvfile {
@@ -3403,8 +3434,47 @@ sub find {
     return shift @files;
 }
 
+sub cmd_iddb {
+    my ($keys_only, %want, $verbose);
+    GetOptions(
+        'k|keys-only' => \$keys_only,
+        'p|projects' => sub { $want{'p'} = 1 },
+        'j|jobs'     => sub { $want{'j'} = 1 },
+        'a|all'      => sub { $want{'p'} = $want{'j'} = 1 },
+        'v|verbose' => \$verbose,
+    ) or usage;
+    if (%want || $keys_only) {
+        my @keys = sort(idkeys(keys %want));
+        if ($keys_only) {
+            print $_, "\n" for @keys;
+        }
+        else {
+            print $_, ' ', idval($_), "\n" for @keys;
+        }
+    }
+    else {
+        while (<STDIN>) {
+            chomp;
+            my ($id, $val) = split /\s+/;
+            if (defined $val) {
+                idval($id => $val);
+            }
+            else {
+                $val = idval($id);
+                if (defined $val) {
+                    print "$id $val\n";
+                }
+                elsif ($verbose) {
+                    print STDERR "- $id no such identifier\n";
+                }
+            }
+        }
+    }
+}
+
 sub mkjob {
     my ($u, $b, $j) = @_;
+    idval($j => join('/', $project->{'id'}, $u, $b));
     my $bdir = "updates/$u/batches/$b";
     makedir("$bdir/jobs");
     my $jdir = "$bdir/jobs/$j";
