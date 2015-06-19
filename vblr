@@ -3435,16 +3435,24 @@ sub find {
 }
 
 sub cmd_iddb {
-    my ($keys_only, %want, $verbose);
+    my ($keys_only, %type, $create, $verbose);
     GetOptions(
         'k|keys-only' => \$keys_only,
-        'p|projects' => sub { $want{'p'} = 1 },
-        'j|jobs'     => sub { $want{'j'} = 1 },
-        'a|all'      => sub { $want{'p'} = $want{'j'} = 1 },
+        'p|projects' => sub { $type{'p'} = 1 },
+        'j|jobs'     => sub { $type{'j'} = 1 },
+        'a|all'      => sub { $type{'p'} = $type{'j'} = 1 },
+        'c|create'   => \$create,
         'v|verbose' => \$verbose,
     ) or usage;
-    if (%want || $keys_only) {
-        my @keys = sort(idkeys(keys %want));
+    if ($create) {
+        usage if !@ARGV;
+        keys(%type) == 1 && $type{'j'} or usage;
+        my $j = mkjobid();
+        idval($j => join(' ', @ARGV));
+        print $j, "\n";
+    }
+    elsif (%type || $keys_only) {
+        my @keys = sort(idkeys(keys %type));
         if ($keys_only) {
             print $_, "\n" for @keys;
         }
