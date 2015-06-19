@@ -1954,8 +1954,14 @@ sub load_batch {
     fatal "Load config file not found" if !$cfile || !-e $cfile;
     my $conf = rdkvfile($cfile);
     my $interleaved = bool($conf->{'interleaved'});
+    my $update_mfhds = bool($conf->{'update-mfhds'});
     my $update = rdupdate($u);
     my $purpose = $update->{'purpose'} || ADD;
+    if ($update_mfhds) {
+        fatal "You can't update MFHDs unless the load purpose is replace and records are interleaved"
+            if $purpose ne REPLACE
+            || !$interleaved;
+    }
     my $rec_type = $update->{'marc-type'} || die;
     my @delete;
     $opt{'delete'} = 1 if $purpose eq DELETE;
@@ -1986,6 +1992,9 @@ sub load_batch {
     push @cmd, '-n' if $opt{'dry_run'};
     if (@delete) {
         push @cmd, '-S', '-x', @delete;
+    }
+    elsif ($update_mfhds) {
+        push @cmd, '-h';
     }
     elsif ($interleaved) {
         push @cmd, '-m';
