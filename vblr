@@ -1986,18 +1986,17 @@ sub load_batch {
         '-c' => $cfile,
         '-o' => $j,
         '-f' => $file,
-        '-i' => $profile, 
         '-d' => "$jdir/output",
     );
     push @cmd, '-n' if $opt{'dry_run'};
     if (@delete) {
-        push @cmd, '-S', '-x', @delete;
+        push @cmd, '-S', '-i' => $profile, '-x', @delete;
     }
     elsif ($update_mfhds) {
         push @cmd, '-h';
     }
     elsif ($interleaved) {
-        push @cmd, '-m';
+        push @cmd, '-m', '-i' => $profile;
     }
     if ($opt{'dry_run'}) {
         print STDERR join(' ', 'command:', @cmd), "\n";
