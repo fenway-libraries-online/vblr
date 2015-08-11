@@ -1881,7 +1881,7 @@ sub prepare_batch {
             my $batch = rdbatch($u, $b);
             $expec = $batch->{'count'} if !defined $expec;
             $expec = $e - $s + 1       if !defined $expec;
-            $expec *= 2 if $marc{'type'} eq BIBMFHD;
+            #$expec *= 2 if $marc{'type'} eq BIBMFHD;
             if ($count == $expec) {
                 $result = OK;
                 print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
@@ -1891,7 +1891,7 @@ sub prepare_batch {
                 $status = -1;
             }
             else {
-                print STDERR "Record prep dropped some records: expected $expec, got $count\n";
+                print STDERR "Record prep added or dropped some records: expected $expec, got $count\n";
                 if ($opt{'force'}) {
                     $result = OK;
                     if ($batch->{'count'} != $count) {
@@ -2935,7 +2935,7 @@ sub marc {
         'encoding' => $rec_encoding,
         'error-count' => $num_errors,
         'errors'   => \@errors,
-        'count'    => $cnt,
+        'count'    => $rec_type eq BIBMFHD ? $b : $cnt,
     );
     if (keys(%sig) == 1) {
         my ($sig) = keys %sig;
