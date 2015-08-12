@@ -651,7 +651,7 @@ sub cmd_status {
         my $ustat = rdstatus("updates/$u");
         $sym = $long ? $status2abbrev{$ustat} : $status2chkbox{$ustat};
         printf "    %s %s\n", $sym, $u;
-        next if $ustat eq FINISHED && !defined $b;
+        next if ($ustat eq FINISHED || $ustat eq ARCHIVED) && !defined $b;
         my @b = defined $b ? ($b) : batches($u);
         foreach $b (@b) {
             my $bstat = rdstatus("updates/$u/batches/$b");
