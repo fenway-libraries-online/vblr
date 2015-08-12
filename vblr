@@ -78,6 +78,8 @@ use constant PREPARED  => '@prepared';   # - - B -
 use constant LOADING   => '@loading';    # - - - J
 use constant LOADED    => '@loaded';     # - - J J
 use constant FINISHED  => '@finished';   # - U B -
+use constant ARCHIVING => '@archiving';  # P U - -
+use constant ARCHIVED  => '@archived';   # P U - -
 use constant RECEIVED  => '@received';   # P U - -
 use constant INPROCESS => '@inprocess';  # P U - -
 use constant IDLE      => '@idle';       # P - - -
@@ -785,16 +787,10 @@ sub cmd_batches {
 
 sub cmd_archive {
     if (@ARGV == 0) {
-        my $pstat = rdstatus('.');
-        fatal "Can't archive an active project"
-            if $pstat ne FINISHED && $pstat ne CLOSED;
         archive_project();
     }
     elsif (@ARGV == 1) {
         my ($u) = @ARGV;
-        my $ustat = rdstatus($u);
-        fatal "Can't archive an active update"
-            if $ustat ne FINISHED;
         archive_update($u);
     }
 }
@@ -2214,6 +2210,24 @@ sub archive_project {
 }
 
 sub archive_update {
+    my ($u) = @_;
+    my $udir = "updates/$u";
+    fatal "No such update: $u" if ! -d $udir;
+    my $ustat = rdstatus($udir);
+    fatal "Only finished updates may be archived" if $ustat ne FINISHED;
+    wrstatus($udir, ARCHIVING);
+    my @files = sort grep { !/^[.@]/ && $_ ne 'update.kv' } map { basename($_) } glob("$udir/*");
+    eval {
+        system('tar', -C => $udir, -czf => $udir . '/' . ARCHIVING . '/archive.tar.gz', @files) == 0
+            or die "Can't create archive for update $u: $?\n";
+        system(qw(rm -Rf), map { "$udir/$_" } @files) == 0
+            or die "Can't remove files\n";
+    } or do {
+        unlink ARCHIVING . '/archive.tar.gz';
+        wrstatus($udir, $ustat);
+        fatal $@;
+    };
+    wrstatus($udir, ARCHIVED);
 }
 
 sub run_hook {
