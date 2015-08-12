@@ -578,41 +578,46 @@ sub cmd_export {
         $update->{'code'} = $u;
         $update->{'file'} = basename($update->{'source'});
         $update->{'date'} = $update->{'created'} if !defined $update->{'date'};
-        my @b = batches($u);
-        my %b2status = map { $_ => rdstatus("updates/$u/batches/$_") } @b;
-        @b = grep { $b2status{$_} ne FINISHED } @b
-            if !$all;
-        my $ucount = 0;
-        $update->{'batches'} = [ map {
-            my $b = $_;
-            my $batch = rdbatch($u, $b);
-            my @j = jobs($u, $b);
-            my $bstat = $batch->{'status'} = $b2status{$b};
-            my $n = $batch->{'count'} ||= $batch->{'end'} - $batch->{'begin'} + 1;
-            if ($ustat ne FINISHED) {
-                $ucount += $n if $bstat ne FINISHED && $bstat ne LOADED;
-            }
-            $batch->{'jobs'} = [ map {
-                my $j = $_;
-                my $jstat = rdstatus("updates/$u/batches/$b/jobs/$j");
-                my $job = job($u, $b, $j);
-                my $count   = $job->{'count'}   ||= $batch->{'count'};
-                my $add     = $job->{'add'}     ||= 0;
-                my $match   = $job->{'match'}   ||= 0;
-                my $replace = $job->{'replace'} ||= 0;
-                my $delete  = $job->{'delete'}  ||= 0;
-                my $discard = $job->{'discard'} ||= $count - $add - $match - $replace - $delete;
-                $job->{'status'} = $jstat;
-                $job->{'update'}  ||= $u;
-                push @all_jobs, $job;
-                $job;
-            } @j ];
-            $batch;
-        } @b ];
-        if ($ucount == 0 && $ustat ne FINISHED) {
-            $ucount = $update->{'count'};
+        if ($ustat eq ARCHIVED) {
+            $update->{'batches'} = [];
         }
-        $unloaded += $ucount;
+        else {
+            my @b = batches($u);
+            my %b2status = map { $_ => rdstatus("updates/$u/batches/$_") } @b;
+            @b = grep { $b2status{$_} ne FINISHED } @b
+                if !$all;
+            my $ucount = 0;
+            $update->{'batches'} = [ map {
+                my $b = $_;
+                my $batch = rdbatch($u, $b);
+                my @j = jobs($u, $b);
+                my $bstat = $batch->{'status'} = $b2status{$b};
+                my $n = $batch->{'count'} ||= $batch->{'end'} - $batch->{'begin'} + 1;
+                if ($ustat ne FINISHED) {
+                    $ucount += $n if $bstat ne FINISHED && $bstat ne LOADED;
+                }
+                $batch->{'jobs'} = [ map {
+                    my $j = $_;
+                    my $jstat = rdstatus("updates/$u/batches/$b/jobs/$j");
+                    my $job = job($u, $b, $j);
+                    my $count   = $job->{'count'}   ||= $batch->{'count'};
+                    my $add     = $job->{'add'}     ||= 0;
+                    my $match   = $job->{'match'}   ||= 0;
+                    my $replace = $job->{'replace'} ||= 0;
+                    my $delete  = $job->{'delete'}  ||= 0;
+                    my $discard = $job->{'discard'} ||= $count - $add - $match - $replace - $delete;
+                    $job->{'status'} = $jstat;
+                    $job->{'update'}  ||= $u;
+                    push @all_jobs, $job;
+                    $job;
+                } @j ];
+                $batch;
+            } @b ];
+            if ($ucount == 0 && $ustat ne FINISHED) {
+                $ucount = $update->{'count'};
+            }
+            $unloaded += $ucount;
+        }
         $update;
     } @u ];
     $project->{'jobs'} = \@all_jobs;
