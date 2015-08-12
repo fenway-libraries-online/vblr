@@ -98,6 +98,8 @@ my @statuses = (
     [ LOADING,   '[l]',  'ldg',  1    ],
     [ LOADED,    '[L]',  'ldd',  1    ],
     [ FINISHED,  '[x]',  'fin',  1    ],
+    [ ARCHIVED,  '[A]',  'arc',  1    ],
+    [ ARCHIVING, '[a]',  'arg',  1    ],
     [ RECEIVED,  '[R]',  'rcd',  1    ],
     [ INPROCESS, '[~]',  'pro',  1    ],
     [ IDLE,      '[-]',  'idl',  0    ],
