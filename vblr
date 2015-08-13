@@ -761,9 +761,9 @@ sub cmd_projects {
 
 sub cmd_updates {
     #@ updates [-v] [UPDATE]... :: List updates
-    my ($verbose, @filters, %ustat, %update);
+    my ($long, @filters, %ustat, %update);
     GetOptions(
-        'v|verbose' => \$verbose,
+        'l|long' => \$long,
         's|status=s', => sub {
             my %want = map { '@'.$_ => 1 } split /,/, $_[1];
             push @filters, sub {
@@ -785,10 +785,11 @@ sub cmd_updates {
     foreach my $f (@filters) {
         @u = grep { $f->($_) } @u;
     }
-    if ($verbose) {
+    if ($long) {
         foreach (@u) {
             my $update = $update{$_} ||= rdupdate($_);
-            printf "%7d %-26s %-3.3s %s\n", $update->{'count'}, $_, $update->{'purpose'}//'', $update->{'description'};
+            my $ustat = $ustat{$_} ||= rdstatus("updates/$_");
+            printf "%7d %-3.3s %-3.3s %-26s %s\n", $update->{'count'}, $status2abbrev{$ustat}//'???', $update->{'purpose'}//'', $_, $update->{'description'};
         }
     }
     else {
