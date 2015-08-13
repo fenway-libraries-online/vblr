@@ -834,7 +834,7 @@ sub cmd_archive {
             } updates();
         },
     ) or usage;
-    archive_update($_) for @ARGV;
+    archive_update($_) for unique(@ARGV);
     print STDERR "Nothing to archive\n" if !@ARGV;
 }
 
@@ -864,6 +864,11 @@ sub file_age_filter {
         my $tdelta = (time - $mtime) / $tu;
         return $comp->($tdelta, $ts/$tu);
     };
+}
+
+sub unique {
+    my %seen;
+    map { $seen{$_}++ ? () : ($_) } @_;
 }
 
 sub dur2sec {
