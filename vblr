@@ -765,7 +765,7 @@ sub cmd_updates {
     GetOptions(
         'v|verbose' => \$verbose,
         's|status=s', => sub {
-            my %want = map { $_ => 1 } split /,/, $_[1];
+            my %want = map { '@'.$_ => 1 } split /,/, $_[1];
             push @filters, sub {
                 my ($u) = @_;
                 my $ustat = $ustat{$u} = rdstatus("updates/$u");
