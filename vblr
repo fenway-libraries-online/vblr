@@ -772,6 +772,14 @@ sub cmd_updates {
                 return $u if $want{$ustat};
             };
         },
+        'p|purpose=s', => sub {
+            my %want = map { substr(lc $_, 0, 3) => 1 } split /,/, $_[1];
+            push @filters, sub {
+                my ($u) = @_;
+                my $update = $update{$u} ||= rdupdate($u);
+                return $u if $want{substr($update->{'purpose'} // 'unknown', 0, 3)};
+            };
+        },
     ) or usage;
     my @u = updates(@ARGV);
     foreach my $f (@filters) {
@@ -780,7 +788,7 @@ sub cmd_updates {
     if ($verbose) {
         foreach (@u) {
             my $update = $update{$_} ||= rdupdate($_);
-            printf "%7d %-26s %s\n", $update->{'count'}, $_, $update->{'description'};
+            printf "%7d %-26s %-3.3s %s\n", $update->{'count'}, $_, $update->{'purpose'}//'', $update->{'description'};
         }
     }
     else {
