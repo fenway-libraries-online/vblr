@@ -822,7 +822,7 @@ sub cmd_batches {
 }
 
 sub cmd_archive {
-    my ($all_updates, $all_updates_aged);
+    my ($verbose);
     GetOptions(
         'a|all' => sub {
             push @ARGV, updates();
@@ -833,9 +833,13 @@ sub cmd_archive {
                 $filter->("updates/$_") ? ($_) : ()
             } updates();
         },
+        'v|verbose' => \$verbose,
     ) or usage;
-    archive_update($_) for unique(@ARGV);
-    print STDERR "Nothing to archive\n" if !@ARGV;
+    foreach (unique(@ARGV)) {
+        printf STDERR "%7d %s\n", count_update($_), $_ if $verbose;
+        archive_update($_);
+    }
+    print STDERR "Nothing to archive\n" if $verbose && !@ARGV;
 }
 
 sub cmd_unarchive {
