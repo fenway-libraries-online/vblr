@@ -822,10 +822,12 @@ sub cmd_batches {
 }
 
 sub cmd_archive {
-    my ($verbose);
+    my ($verbose, %ustat);
     GetOptions(
         'a|all' => sub {
-            push @ARGV, updates();
+            push @ARGV, grep {
+                ( $ustat{$_} ||= rdstatus("updates/$_") ) eq FINISHED
+            } updates();
         },
         'A|age=s' => sub {
             my $filter = file_age_filter($_[1]);
