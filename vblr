@@ -780,6 +780,12 @@ sub cmd_updates {
                 return $u if $want{substr($update->{'purpose'} // 'unknown', 0, 3)};
             };
         },
+        'A|age=s' => sub {
+            my $filter = file_age_filter($_[1]);
+            push @filters, sub {
+                grep { $filter->("updates/$_") } @_;
+            };
+        },
     ) or usage;
     my @u = updates(@ARGV);
     foreach my $f (@filters) {
@@ -816,13 +822,20 @@ sub cmd_batches {
 }
 
 sub cmd_archive {
-    if (@ARGV == 0) {
-        archive_project();
-    }
-    elsif (@ARGV == 1) {
-        my ($u) = @ARGV;
-        archive_update($u);
-    }
+    my ($all_updates, $all_updates_aged);
+    GetOptions(
+        'a|all' => sub {
+            push @ARGV, updates();
+        },
+        'A|age=s' => sub {
+            my $filter = file_age_filter($_[1]);
+            push @ARGV, grep {
+                $filter->("updates/$_") ? ($_) : ()
+            } updates();
+        },
+    ) or usage;
+    archive_update($_) for @ARGV;
+    print STDERR "Nothing to archive\n" if !@ARGV;
 }
 
 sub cmd_unarchive {
@@ -833,6 +846,45 @@ sub cmd_unarchive {
         my ($u) = @ARGV;
         unarchive_update($u);
     }
+}
+
+sub file_age_filter {
+    local $_ = shift;
+    my $comp = s/^\+// ? sub { $_[0] > $_[1] }
+             : s/^\-// ? sub { $_[0] < $_[1] }
+             : s/^=?// ? sub { int($_[0]) == int($_[1]) }
+             : fatal
+             ;
+    my ($ts, $tu) = dur2sec($_);
+    return sub {
+        my ($f) = @_;
+        my @stat = stat $f;
+        warning("Can't stat $f: $!"), return if !@stat;
+        my $mtime = $stat[9];
+        my $tdelta = (time - $mtime) / $tu;
+        return $comp->($tdelta, $ts/$tu);
+    };
+}
+
+sub dur2sec {
+    my %u2s = qw(
+        y   31557600
+        w     604800
+        d      86400
+        h       3600
+        m         60
+        s          1
+    );
+    my $t = shift;
+    my $s = 0;
+    my $u = 's';
+    while ($t =~ s/^(\d+)([ywdhms])//) {
+        $s += $1 * $u2s{$2};
+        $u = $2;
+    }
+    $s += $t if $t =~ /^\d+$/;
+    return ($s, $u2s{$u}) if wantarray;
+    return $s;
 }
 
 sub remove_job {
@@ -2270,6 +2322,7 @@ sub archive_update {
         fatal $@;
     };
     wrstatus($udir, ARCHIVED);
+    aplast('archive', 'update' => $u);
 }
 
 sub unarchive_project {
@@ -2294,6 +2347,7 @@ sub unarchive_update {
         fatal $@;
     };
     wrstatus($udir, FINISHED);
+    aplast('unarchive', 'update' => $u);
 }
 
 sub run_hook {
