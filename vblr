@@ -303,6 +303,14 @@ sub cmd_add {
                                  $meta{$k} = $v;
                              },
         'x|delete'        => sub { $opt{'purpose'} = DELETE },
+        'u|purpose=s'     => sub {
+            local $_ = $_[1];
+            $opt{'purpose'}
+                = /^a(?:dd)$/      ? ADD
+                : /^r(?:eplace)?$/ ? REPLACE
+                : /^d(?:elete)?$/  ? DELETE
+                : usage;
+        },
         'C|copy'          => \$opt{'copy'},
         'm|description=s' => \$opt{'description'},
         'p|prototype=s'   => \$opt{'prototype'},
