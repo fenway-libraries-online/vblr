@@ -267,31 +267,32 @@ sub cmd_init {
 }
 
 sub cmd_base {
-    #@ base [-C] [-m DESCRIP] FILE :: Add the base MARC file for the project
-    my ($descrip, $empty, $copy, $historical);
-    my $purpose = ADD;
-    GetOptions(
-        'x|delete' => sub { $purpose = DELETE },
-        'C|copy' => \$copy,
-        'E|empty' => sub { $empty = $copy = 1 },
-        'm|description=s' => \$descrip,
-        'i|historical' => \$historical,
-    ) or usage;
-    ask $descrip, 'Description: ', 'base file' if !defined $descrip;
-    @ARGV = qw(/dev/null) if $empty;
-    usage if @ARGV != 1;
-    add(
-        'purpose' => $purpose,
+    #@ base [-CEik] [-m DESCRIP] FILE :: Add the base MARC file for the project
+    my %opt = (
+        'purpose' => ADD,
         'update' => 'BASE',
-        'file' => $ARGV[0],
-        'description' => $descrip,
-        'copy' => $copy,
-        'historical' => $historical,
     );
+    my ($kit, $descrip, $empty, $copy, $historical);
+    GetOptions(
+        'k|from-kits'     => \$opt{'kits'},
+        'C|copy'          => \$opt{'copy'},
+        'E|empty'         => sub { $opt{'empty'} = $opt{'copy'} = 1 },
+        'm|description=s' => \$opt{'description'},
+        'i|historical'    => \$opt{'historical'},
+    ) or usage;
+    ask $opt{'description'}, 'Description: ', 'base file' if !defined $opt{'description'};
+    @ARGV = qw(/dev/null) if $opt{'empty'};
+    usage if @ARGV != 1;
+    if ($opt{'kits'}) {
+        add_from_kits(\%opt, @ARGV);
+    }
+    else {
+        add(%opt, 'file' => $ARGV[0]);
+    }
 }
 
 sub cmd_add {
-    #@ add [-LCRikvx] [-p PROTO] [-m DESCRIP] FILE|KIT [NAME] :: Add a MARC file to the project
+    #@ add [-CLRikvx] [-p PROTO] [-m DESCRIP] FILE|KIT [NAME] :: Add a MARC file to the project
     my (%opt, %meta);
     GetOptions(
         'k|from-kits'     => \$opt{'kits'},
