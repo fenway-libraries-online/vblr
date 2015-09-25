@@ -279,6 +279,13 @@ sub cmd_base {
         'E|empty'         => sub { $opt{'empty'} = $opt{'copy'} = 1 },
         'm|description=s' => \$opt{'description'},
         'i|historical'    => \$opt{'historical'},
+        'u|purpose=s'     => sub {
+            local $_ = $_[1];
+            $opt{'purpose'}
+                = /^a(?:dd)$/      ? ADD
+                : /^r(?:eplace)?$/ ? REPLACE
+                : usage;
+        },
     ) or usage;
     ask $opt{'description'}, 'Description: ', 'base file' if !defined $opt{'description'};
     @ARGV = qw(/dev/null) if $opt{'empty'};
