@@ -725,7 +725,7 @@ sub cmd_finish {
                 wrstatus("updates/$u/batches/$b", FINISHED);
                 aplog('finish', 'update' => $u, 'batch' => $b);
                 aplast('finish', 'update' => $u, 'batch' => $b);
-                run_hook('finished');
+                run_hook('finished', 'update' => $u);
             }
             else {
                 finish_update($u);
@@ -2123,16 +2123,8 @@ sub load_batch {
     wrkvfile("$jdir/job.kv", $job);
     wrstatus($jdir, LOADING);
     # Actually load the records!
-    my $err;
-    {
-        local $ENV{'VBLR_PROJECT'} = $pcur;
-        local $ENV{'VBLR_UPDATE' } = $u;
-        local $ENV{'VBLR_BATCH'  } = $b;
-        local $ENV{'VBLR_JOB'    } = $j;
-        local $ENV{'VBLR_PURPOSE'} = $purpose;
-        run_hook('loading', update => $u, batch => $b, job => $j);
-        $err = system(@cmd);
-    }
+    run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose);
+    my $err = system(@cmd);
     wrstatus($jdir, FINISHED);
     my $log = "$jdir/output/$j.log";
     my @results = load_results($log);
@@ -2193,7 +2185,7 @@ sub load_batch {
         cmd_mkhtml();
     }
     mkdrops($j) if $job->{'discard'} > 0;
-    run_hook('loaded', update => $u, batch => $b, job => $j);
+    run_hook('loaded', update => $u, batch => $b, job => $j, purpose => $purpose);
 }
 
 sub finish_update {
@@ -2217,7 +2209,7 @@ sub finish_update {
     }
     aplog('finish', 'update' => $u);
     aplast('finish', 'update' => $u);
-    run_hook('finished');
+    run_hook('finished', 'update' => $u);
 }
 
 sub notify {
@@ -2370,6 +2362,15 @@ sub unarchive_update {
     aplast('unarchive', 'update' => $u);
 }
 
+sub cmd_hook {
+    my $hook = shift @ARGV;
+    my %arg = map { split /=/, $_, 2 } @ARGV;
+    $arg{'project'} ||= $pcur;
+    $arg{'update'}  ||= $ucur;
+    $arg{'batch'}   ||= $bcur;
+    run_hook($hook, %arg);
+}
+
 sub run_hook {
     my ($hook, %arg) = @_;
     my @where = ($pdir);
@@ -2382,7 +2383,8 @@ sub run_hook {
     my $f = find("bin/hook.$hook", reverse @where);
     if (defined $f && -x $f) {
         local %ENV = %ENV;
-        @ENV{qw(VBLR_PROJECT VBLR_UPDATE VBLR_BATCH VBLR_JOB)} = map { $_ || '' } ($project->{'code'}, $u, $b, $j);
+        $ENV{'VBLR_'.uc} = $arg{$_} for keys %arg;
+        $ENV{'VBLR_PROJECT'} ||= $project->{'code'};
         system($f);
     }
 }
