@@ -260,7 +260,7 @@ sub cmd_init {
     }
     wrkvfile('vblr.kv', vblr(TIMESTAMP));
     wrproject($project);
-    makedir('updates');
+    makedir('updates', 'inbox');
     wrstatus('.', NEW);
     aplast('init');
     aplog('init', result => OK);
