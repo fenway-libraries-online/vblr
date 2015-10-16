@@ -722,7 +722,8 @@ sub cmd_receive {
     my $dest = 'inbox/' . basename($what);
     fatal "Can't overwrite $dest with $what"
         if -e $dest;
-    move($what, $dest);
+    move($what, $dest)
+        or fatal "Can't move $what to the project inbox: $!";
     wrstatus('.', RECEIVED);
     aplog('received', 'what' => $what, defined $comment ? ('comment' => $comment) : ());
     aplast('received');
