@@ -2416,6 +2416,7 @@ sub run_hook {
     if (defined $f && -x $f) {
         local %ENV = %ENV;
         while (my ($k, $v) = each %arg) {
+            delete $ENV{'VBLR_'.uc($k)};
             $ENV{'VBLR_'.uc($k)} = $v if defined $v;
         }
         $ENV{'VBLR_PROJECT'} ||= $project->{'code'};
