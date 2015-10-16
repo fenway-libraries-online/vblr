@@ -731,10 +731,11 @@ sub cmd_finish {
         my ($u, $b) = resolve_update_and_batch(@ARGV);
         if (defined $u) {
             if (defined $b) {
+                my $purpose = purpose($u, $b);
                 wrstatus("updates/$u/batches/$b", FINISHED);
                 aplog('finish', 'update' => $u, 'batch' => $b);
                 aplast('finish', 'update' => $u, 'batch' => $b);
-                run_hook('finished', 'update' => $u);
+                run_hook('finished', 'update' => $u, 'batch' => $b, 'purpose' => $purpose);
             }
             else {
                 finish_update($u);
@@ -2225,6 +2226,7 @@ sub finish_update {
     # Update completed -- send notification
     my $udir = "updates/$u";
     wrstatus($udir, FINISHED);
+    my $purpose = purpose($u);
     my ($cfile) = find('conf/notify.kv',  $udir, '.', $root);
     my ($tfile) = find('conf/notify.msg', $udir, '.', $root);
     if (defined $cfile) {
@@ -2241,7 +2243,7 @@ sub finish_update {
     }
     aplog('finish', 'update' => $u);
     aplast('finish', 'update' => $u);
-    run_hook('finished', 'update' => $u);
+    run_hook('finished', 'update' => $u, 'purpose' => $purpose);
 }
 
 sub notify {
@@ -3372,7 +3374,7 @@ sub add {
             'count' => $count,
         );
         aplast($verb, update => $u);
-        run_hook('added', update => $u, batch => $b);
+        run_hook('added', update => $u, batch => $b, purpose => $purpose);
     }
     return $count;
 }
