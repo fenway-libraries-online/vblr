@@ -2420,6 +2420,38 @@ sub run_hook {
     }
 }
 
+sub cmd_purpose {
+    my ($long);
+    GetOptions(
+        'l|long' => \$long,
+    ) or usage;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my $purpose = purpose($u, $b);
+    my @pfx = $long ? (grep { defined } $u, $b) : ();
+    if (!defined $purpose) {
+        print STDERR "vblr: warning: Update purpose not specified: $u\n";
+        $purpose = ($u =~ /replace/i) ? REPLACE
+                 : ($u =~ /del/i    ) ? DELETE
+                 : ADD;
+    }
+    print join(' ', @pfx, $purpose), "\n";
+}
+
+sub purpose {
+    my ($u, $b) = @_;
+    my $udir = "updates/$u";
+    my $status = rdstatus($udir);
+    if (defined $b) {
+        fatal "Can't determine the purpose of an archived batch"
+            if $status = ARCHIVED;
+        my $bdir = "$udir/batches/$b";
+        my $batch = rdbatch($u, $b);
+        return $batch->{'purpose'} if defined $batch->{'purpose'};
+    }
+    my $update = rdupdate($u);
+    return $update->{'purpose'};
+}
+
 sub drops {
     my ($log) = @_;
     open my $fh, '-|', 'vbilog', $log or die;
