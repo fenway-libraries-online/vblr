@@ -223,7 +223,8 @@ sub cmd_init {
     if ($pdir =~ m{^$root/groups/([^/]+)/projects/([^/]+)$}) {
         $pcode = "$1/$2";
     }
-    elsif ($pdir =~ m{^$root/(.+)$}) {
+    elsif ($pdir =~ m{^$root/([^/]+/[^/]+)$}) {
+        # Shorthand: $root/$group/$project
         $pcode = $1;
     }
     else {
@@ -788,7 +789,7 @@ sub cmd_updates {
                 return $u if $want{$ustat};
             };
         },
-        'p|purpose=s', => sub {
+        'p|u|purpose=s', => sub {
             my %want = map { substr(lc $_, 0, 3) => 1 } split /,/, $_[1];
             push @filters, sub {
                 my ($u) = @_;
@@ -1391,11 +1392,34 @@ sub cmd_www {
 }
 
 sub cmd_cat {
-    #@ cat [UPDATE] [BATCH] :: print records in an update or batch
+    #@ cat UPDATE [BATCH] :: print records in an update or batch
     my ($u, $b) = resolve_update_and_batch(@ARGV);
-    my ($start, @files) = find_marc($u, $b);
-    fatal "No files to cat" if !@files;
-    system('cat', @files);
+    usage if !defined $u;
+    my $udir = "updates/$u";
+    my $err;
+    if (rdstatus($udir) eq ARCHIVED) {
+        fatal "Update $u is archived" if defined $b;
+        my $file = find_archived_update_marc($u);
+        $err = system(qw(tar -xzf), "$udir/\@archived/archive.tar.gz", '-O', $file);
+    }
+    else {
+        my ($start, @files) = find_marc($u, $b);
+        fatal "No files to cat" if !@files;
+        $err = system('cat', @files);
+    }
+    exit $err;
+}
+
+sub find_archived_update_marc {
+    my ($u) = @_;
+    my $udir = "updates/$u";
+    open my $fh, '-|', qw(tar -tzf), "$udir/\@archived/archive.tar.gz", '*.mrc'
+        or fatal "Can't tar -tzf $udir/\@archived/archive.tar.gz: $!";
+    my @files = grep { /^[^\s\/]+\.mrc$/ } <$fh>;
+    fatal "No *.mrc file in update $u"        if @files < 1;
+    fatal "Multiple *.mrc files in update $u" if @files > 1;
+    chomp @files;
+    shift @files;
 }
 
 sub cmd_less {
