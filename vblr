@@ -185,6 +185,7 @@ my %skip_orient = map { $_ => 1 } qw( init help projects groups www iddb );
 my %iddb;
 
 my $cmd = shift @ARGV;
+$cmd =~ tr/-/_/;
 my $sub = __PACKAGE__->can("cmd_$cmd") || usage_commands;
 orient() if !$skip_orient{$cmd};
 $sub->();
@@ -2414,7 +2415,9 @@ sub run_hook {
     my $f = find("bin/hook.$hook", reverse @where);
     if (defined $f && -x $f) {
         local %ENV = %ENV;
-        $ENV{'VBLR_'.uc} = $arg{$_} for keys %arg;
+        while (my ($k, $v) = each %arg) {
+            $ENV{'VBLR_'.uc($k)} = $v if defined $v;
+        }
         $ENV{'VBLR_PROJECT'} ||= $project->{'code'};
         system($f);
     }
