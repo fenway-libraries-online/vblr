@@ -718,11 +718,15 @@ sub cmd_receive {
     my $comment;
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     usage if @ARGV != 1;
-    my ($file) = @ARGV;
+    my ($what) = @ARGV;
+    my $dest = 'inbox/' . basename($what);
+    fatal "Can't overwrite $dest with $what"
+        if -e $dest;
+    move($what, $dest);
     wrstatus('.', RECEIVED);
-    aplog('received', 'file' => $file, defined $comment ? ('comment' => $comment) : ());
+    aplog('received', 'what' => $what, defined $comment ? ('comment' => $comment) : ());
     aplast('received');
-    run_hook('received', 'file' => $file);
+    run_hook('received', 'what' => $what);
 }
 
 sub cmd_finish {
