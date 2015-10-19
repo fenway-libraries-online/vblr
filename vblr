@@ -3685,7 +3685,7 @@ sub find {
 }
 
 sub cmd_iddb {
-    my ($keys_only, %type, $create, $verbose);
+    my ($keys_only, %type, $create, $verbose, $deref);
     GetOptions(
         'k|keys-only' => \$keys_only,
         'p|projects' => sub { $type{'p'} = 1 },
@@ -3693,6 +3693,7 @@ sub cmd_iddb {
         'a|all'      => sub { $type{'p'} = $type{'j'} = 1 },
         'c|create'   => \$create,
         'v|verbose' => \$verbose,
+        'd|deref'   => \$deref,
     ) or usage;
     if ($create) {
         usage if !@ARGV;
@@ -3707,7 +3708,15 @@ sub cmd_iddb {
             print $_, "\n" for @keys;
         }
         else {
-            print $_, ' ', idval($_), "\n" for @keys;
+            foreach my $k (@keys) {
+                my $v = idval($k);
+                if ($deref && $v =~ m{^(p[^/]+)/(.+)}) {
+                    my ($p, $j) = ($1, $2);
+                    my $vd = idval($p);
+                    $v = "$vd/$j" if defined $vd;
+                }
+                print $k, ' ', $v, "\n";
+            }
         }
     }
     else {
