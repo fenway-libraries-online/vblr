@@ -1158,7 +1158,7 @@ sub cmd_mkdrops {
 }
 
 sub cmd_jobs {
-    #@ jobs [UPDATE] [BATCH] :: List load jobs
+    #@ jobs [-B] [UPDATE [BATCH]] :: List load jobs
     my $brief;
     GetOptions(
         'B|brief' => \$brief,
@@ -1283,7 +1283,7 @@ sub cmd_results {
 }
 
 sub cmd_res1 {
-    #@ res1 [UPDATE] [BATCH] :: Show detailed load results
+    #@ res1 [-v] [-j JOB] [UPDATE [BATCH]] :: Show detailed load results
     my ($verbose, $u, $b, $j, @jobs);
     GetOptions(
         'v|verbose' => \$verbose,
@@ -1453,14 +1453,14 @@ sub find_archived_update_marc {
 }
 
 sub cmd_less {
-    #@ less [UPDATE] [BATCH] :: show records in an update or batch
+    #@ less [UPDATE [BATCH]] :: show records in an update or batch
     my ($u, $b) = resolve_update_and_batch(@ARGV);
     my ($start, @files) = find_marc($u, $b);
     system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
 }
 
 sub cmd_find {
-    #@ find [-m|-c [TYPE]] [UPDATE] [BATCH] :: print the path to a file or directory in a project
+    #@ find [-m|-c [TYPE]] [UPDATE [BATCH]] :: print the path to a file or directory in a project
     my ($absolute, $what, $name);
     GetOptions(
         'A|absolute' => \$absolute,
@@ -1637,7 +1637,7 @@ sub cmd_log {
 }
 
 sub cmd_mkhtml {
-    #@ mkhtml [-nzig] [-j JOB | -S SET] [-m DESCRIP] [-o PATH] [-s URL] [UPDATE [BATCH]] :: Make a web page showing records
+    #@ mkhtml [-nzig] [-j JOB|-S SET] [-m DESC] [-o PATH] [-s URL] [UPD [BATCH]] :: Make a web page showing records
     my $www = rdkvfile("$root/conf/www.kv");
     my $www_root = $www->{'file-root'};
     my $url_base = $www->{'url-base'};
