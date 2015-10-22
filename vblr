@@ -3390,7 +3390,7 @@ sub add {
             'count' => $count,
         );
         aplast($verb, update => $u);
-        run_hook('added', update => $u, batch => $b, purpose => $purpose);
+        run_hook('added', update => $u, purpose => $purpose);
     }
     return $count;
 }
