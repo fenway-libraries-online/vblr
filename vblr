@@ -3273,16 +3273,32 @@ sub usage {
     exit 1;
 }
 
+sub cmd_help {
+    #@ help [COMMAND] :: show helpful information
+    goto &usage_commands if !@ARGV || @ARGV == 1 && $ARGV[0] eq 'commands';
+    my ($commands, $wcmd, $wargs) = commands(@ARGV);
+    while (@$commands) {
+        my ($cmd, $args, $desc) = @{ shift @$commands };
+        print STDERR <<"EOS";
+vblr $cmd $args
+    $desc
+EOS
+        print STDERR "\n" if @$commands;
+    }
+}
+
 sub commands {
+    my %cmd = map { $_ => 1 } @_;
     open my $fh, '<', $0 or return;
     my ($wcmd, $wargs) = (0, 0);
     my ($lcmd, $largs);
     my @commands;
     while (<$fh>) {
         next if !s/^\s*#@ (\S+)(?:\s+(.+))?\s+::\s+(.+)//;
+        next if %cmd && !$cmd{$1};
         my ($cmd, $args, $desc) = ($1, $2 || '', $3);
         chomp;
-        push @commands, [ $cmd, $args, $desc ];
+        push @commands, [ $cmd, $args, ucfirst $desc ];
         ($lcmd, $largs) = (length $cmd, length $args);
         $wcmd = $lcmd if $lcmd > $wcmd;
         $wargs = $largs if $largs > $wargs;
