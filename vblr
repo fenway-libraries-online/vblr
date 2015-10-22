@@ -2777,6 +2777,15 @@ sub makedir {
 
 sub orient {
     my ($udir, $bdir);
+    if (!defined $pdir && defined $ENV{'VBLR_PROJECT'}) {
+        $pdir = "$root/$ENV{'VBLR_PROJECT'}";
+        if (defined $ENV{'VBLR_UPDATE'}) {
+            $udir = "$pdir/updates/$ENV{'VBLR_UPDATE'}";
+            if (defined $ENV{'VBLR_BATCH'}) {
+                $bdir = "$udir/batches/$ENV{'VBLR_BATCH'}";
+            }
+        }
+    }
     if (defined $pdir) {
         $pdir = "$root/$pdir" if substr($pdir, 0, 1) ne '/';
         chdir $pdir or fatal "Can't chdir $pdir: $!";
