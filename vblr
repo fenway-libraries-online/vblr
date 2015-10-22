@@ -67,6 +67,10 @@ use constant ERR => 'ERR';
 use constant STOP => 'stop';
 use constant NEXT => 'next';
 
+# Things to find
+use constant MARCFILE => 'MARCFILE';
+use constant CONFDIR  => 'CONFDIR';
+
 # Project/update/batch/job status
 use constant NEW       => '@new';        # P U - -
 use constant ERROR     => '@error';      # - - B J
@@ -1445,6 +1449,44 @@ sub cmd_less {
     my ($u, $b) = resolve_update_and_batch(@ARGV);
     my ($start, @files) = find_marc($u, $b);
     system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
+}
+
+sub cmd_find {
+    #@ find [-m|-c [TYPE]] [UPDATE] [BATCH] :: print the path to a file or directory in a project
+    my ($absolute, $what, $name);
+    GetOptions(
+        'A|absolute' => \$absolute,
+        'm|marc-file' => sub { $what = MARCFILE },
+        'c|conf=s' => sub { $what = CONFDIR; $name = $_[1] },
+    ) or usage;
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my $base = '';
+    if (defined $u) {
+        $base = "updates/$u/";
+        fatal "No such update: $u" if !-d $base;
+    }
+    if (defined $b) {
+        $base .= "batches/$b/";
+        fatal "No such batch: $b" if !-d $base;
+    }
+    my @files;
+    if (!defined $what) {
+        @files = (dirname("${base}."));
+    }
+    elsif ($what eq MARCFILE) {
+        (undef, @files) = find_marc($u, $b);
+    }
+    elsif ($what eq CONFDIR) {
+        my @what = ( "${base}conf/$name.kv" );
+        push @what, "conf/$name.kv" if length $base;
+        @files = files(@what);
+        @files = ($files[0]) if @files;
+    }
+    else {
+        fatal "Finding things besides MARC files is not yet implemented";
+    }
+    @files = map { "$pdir/$_" } @files if $absolute;
+    print $_, "\n" for @files;
 }
 
 sub find_marc {
