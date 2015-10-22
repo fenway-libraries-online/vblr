@@ -3685,9 +3685,10 @@ sub find {
 }
 
 sub cmd_iddb {
-    my ($keys_only, %type, $create, $verbose, $deref);
+    my (%type, $create, $keys_only, $brief, $verbose, $deref);
     GetOptions(
         'k|keys-only' => \$keys_only,
+        'B|brief'     => \$brief,
         'p|projects' => sub { $type{'p'} = 1 },
         'j|jobs'     => sub { $type{'j'} = 1 },
         'a|all'      => sub { $type{'p'} = $type{'j'} = 1 },
@@ -3702,6 +3703,18 @@ sub cmd_iddb {
         idval($j => join(' ', @ARGV));
         print $j, "\n";
     }
+    elsif (@ARGV) {
+        foreach my $k (@ARGV) {
+            my $v = idval($k);
+            if ($deref && defined($v) && $v =~ m{^(p[^/]+)/(.+)}) {
+                my ($p, $j) = ($1, $2);
+                my $vd = idval($p);
+                $v = "$vd/$j" if defined $vd;
+            }
+            fatal "Not found: $k" if !defined $v;
+            print $brief ? ($v, "\n") : ($k, ' ', $v, "\n");
+        }
+    }
     elsif (%type || $keys_only) {
         my @keys = sort(idkeys(keys %type));
         if ($keys_only) {
@@ -3715,7 +3728,7 @@ sub cmd_iddb {
                     my $vd = idval($p);
                     $v = "$vd/$j" if defined $vd;
                 }
-                print $k, ' ', $v, "\n";
+                print $brief ? ($v, "\n") : ($k, ' ', $v, "\n");
             }
         }
     }
