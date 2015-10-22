@@ -648,6 +648,7 @@ sub cmd_export {
 }
 
 sub cmd_id {
+    #@ id :: Print project ID, code, and description
     print join(' ', @$project{qw(id code description)}), "\n";
 }
 
@@ -692,6 +693,7 @@ sub cmd_status {
 sub cmd_fin { goto &cmd_finish }
 
 sub cmd_onhold {
+    #@ onhold [-m COMMENT] :: set project status = on hold
     my $comment;
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     wrstatus('.', ONHOLD);
@@ -701,6 +703,7 @@ sub cmd_onhold {
 }
 
 sub cmd_idle {
+    #@ idle [-m COMMENT] :: set project status = idle
     my $comment;
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     wrstatus('.', IDLE);
@@ -710,6 +713,7 @@ sub cmd_idle {
 }
 
 sub cmd_close {
+    #@ close [-m COMMENT] :: set project status = closed
     my $comment;
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     wrstatus('.', CLOSED);
@@ -719,6 +723,7 @@ sub cmd_close {
 }
 
 sub cmd_receive {
+    #@ receive [-m COMMENT] :: set project status = received
     my $comment;
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     usage if @ARGV != 1;
@@ -735,7 +740,7 @@ sub cmd_receive {
 }
 
 sub cmd_finish {
-    #@ finish [UPDATE [BATCH]]
+    #@ finish [-v] [UPDATE [BATCH]] :: finish an update or batch
     my ($verbose);
     GetOptions(
         'v|verbose' => \$verbose,
@@ -861,6 +866,7 @@ sub cmd_batches {
 }
 
 sub cmd_archive {
+    #@ archive [-av] [-A AGE] :: Archive one or more updates
     my ($verbose, %ustat);
     GetOptions(
         'a|all' => sub {
@@ -884,6 +890,7 @@ sub cmd_archive {
 }
 
 sub cmd_unarchive {
+    #@ unarchive [UPDATE] :: Unarchive an archived update or project
     if (@ARGV == 0) {
         unarchive_project();
     }
@@ -1146,6 +1153,7 @@ sub mkdrops {
 }
 
 sub cmd_mkdrops {
+    #@ mkdrops :: Construct a MARC file of dropped records
     system("$root/bin/mkdrops", @ARGV);
 }
 
@@ -1401,7 +1409,7 @@ sub cmd_match {
 }
 
 sub cmd_www {
-    #@ www [COMMAND [ARG]...]
+    #@ www [COMMAND [ARG]...] :: rebuild static Web site
     @ARGV = qw(build) if !@ARGV;
     my $cmd = shift @ARGV;
     if ($cmd eq 'build') {
@@ -1575,6 +1583,7 @@ sub cmd_check {
 }
 
 sub cmd_walk {
+    #@ walk [PROJECT [UPDATE [BATCH [JOB]]]] :: show details on (part of) a project in tree form
     projwalk {
         my ($p, $u, $b, $j) = @_;
         if ($j) {
@@ -1602,6 +1611,7 @@ sub cmd_walk {
 }
 
 sub cmd_log {
+    #@ log :: show details from the project log
     my @log = rdlog();
     foreach (@log) {
         my ($verb, $date, $count, $update) = @$_{qw(verb date count update)};
@@ -1879,12 +1889,14 @@ sub cmd_carry {
 }
 
 sub cmd_latest {
+    #@ latest :: print the latest update
     my $latest = latest();
     exit 2 if !defined $latest;
     print $latest, "\n";
 }
 
 sub cmd_project {
+    #@ project :: print the project code
     print $project->{'code'}, "\n";
 }
 
@@ -2455,6 +2467,7 @@ sub unarchive_update {
 }
 
 sub cmd_hook {
+    #@ hook NAME [KEY=VALUE]... :: run a hook in the appropriate context
     my $hook = shift @ARGV;
     my %arg = map { split /=/, $_, 2 } @ARGV;
     $arg{'project'} ||= $pcur;
@@ -2485,6 +2498,7 @@ sub run_hook {
 }
 
 sub cmd_purpose {
+    #@ purpose [-l] [UPDATE [BATCH]] :: print update or batch purpose
     my ($long);
     GetOptions(
         'l|long' => \$long,
@@ -3736,6 +3750,7 @@ sub find {
 }
 
 sub cmd_iddb {
+    #@ iddb [-c -j PROJ/UPDATE/BATCH [NOTE] | [-kBpjavd] [KEY]...] :: create a job ID or otherwise manage the ID database
     my (%type, $create, $keys_only, $brief, $verbose, $deref);
     GetOptions(
         'k|keys-only' => \$keys_only,
