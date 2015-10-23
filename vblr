@@ -1055,19 +1055,8 @@ sub cmd_prep {
     ) or usage;
     $verbose = 1 if $dry_run;
     usage if @ARGV > 2;
-    my ($u, $b) = resolve_update_and_batch(@ARGV);
-    if (!defined $b) {
-        if (!defined $u) {
-            my @u = grep { my $s = rdstatus("updates/$_"); $s eq INPROCESS } updates();
-            fatal "No update is in process" if !@u;
-            fatal "Can't guess what to prep" if @u > 1;
-            ($u) = @u;
-        }
-        my @b = grep { my $s = rdstatus("updates/$u/batches/$_"); $s eq NEW || $s eq PREPARED } batches($u);
-        fatal "Update $u doesn't have any new (or previously prepared) batches" if !@b;
-        $b = $b[0];
-        warning "Assuming you want to prep the next new batch ($b) in update $u";
-    }
+    my ($u, $b) = infer_update_and_batch(INPROCESS, NEW, resolve_update_and_batch(@ARGV));
+    usage if !defined $b;
     prepare_batch($u, $b,
         'verbose' => $verbose,
         'dry_run' => $dry_run,
@@ -1134,14 +1123,8 @@ sub cmd_load {
     ) or usage;
     $verbose = 1 if $dry_run;
     usage if @ARGV > 2;
-    my ($u, $b) = resolve_update_and_batch(@ARGV);
-    if (!defined $b) {
-        fatal "You must specify an update" if !defined $u;
-        my @b = grep { rdstatus("updates/$u/batches/$_") eq PREPARED } batches($u);
-        fatal "Update $u doesn't have any prepped batches" if !@b;
-        $b = $b[0];
-        warning "Assuming you want to load the next prepped batch ($b) in update $u";
-    }
+    my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
+    usage if !defined $b;
     my %opt = (
         'delete'         => $delete,
         'verbose'        => $verbose,
@@ -1205,6 +1188,23 @@ sub resolve_update_batch_and_job {
         fatal "Can't resolve batch" if !defined $b;
         return ( $u, $b, map { basename($_) } dirs("updates/$u/batches/$b/jobs/*") );
     }
+}
+
+sub infer_update_and_batch {
+    # Try to determine which update and batch should be acted upon next
+    my ($ustat, $bstat, $u, $b) = @_;
+    if (!defined $b) {
+        if (!defined $u) {
+            my @u = grep { my $s = rdstatus("updates/$_"); $s eq $ustat } updates();
+            fatal "Can't deduce an update" if !@u;
+            ($u) = @u;
+        }
+        my @b = grep { my $s = rdstatus("updates/$u/batches/$_"); $s eq $bstat } batches($u);
+        fatal "Can't deduce a batch" if !@b;
+        ($b) = @b;
+        askbool "Did you mean batch $b in update $u?" or return;
+    }
+    return ($u, $b);
 }
 
 sub cmd_results {
