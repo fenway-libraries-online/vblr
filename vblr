@@ -1056,7 +1056,7 @@ sub cmd_prep {
     $verbose = 1 if $dry_run;
     usage if @ARGV > 2;
     my ($u, $b) = infer_update_and_batch(INPROCESS, NEW, resolve_update_and_batch(@ARGV));
-    usage if !defined $b;
+    quit "Cancelled" if !defined $b;
     prepare_batch($u, $b,
         'verbose' => $verbose,
         'dry_run' => $dry_run,
@@ -1124,7 +1124,7 @@ sub cmd_load {
     $verbose = 1 if $dry_run;
     usage if @ARGV > 2;
     my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
-    usage if !defined $b;
+    quit "Cancelled" if !defined $b;
     my %opt = (
         'delete'         => $delete,
         'verbose'        => $verbose,
