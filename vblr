@@ -723,12 +723,13 @@ sub cmd_close {
 }
 
 sub cmd_receive {
-    #@ receive [-m COMMENT] :: set project status = received
+    #@ receive [-m COMMENT] FILE :: receive a file for a project
     my $comment;
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     usage if @ARGV != 1;
     my ($what) = @ARGV;
     my $dest = 'inbox/' . basename($what);
+    makedir('inbox');
     fatal "Can't overwrite $dest with $what"
         if -e $dest;
     move($what, $dest)
