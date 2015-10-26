@@ -1428,8 +1428,8 @@ sub cmd_www {
 }
 
 sub cmd_cat {
-    #@ cat UPDATE [BATCH] :: print records in an update or batch
-    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    #@ cat [UPDATE [BATCH]] :: print records in an update or batch
+    my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
     usage if !defined $u;
     my $udir = "updates/$u";
     my $err;
@@ -1460,7 +1460,7 @@ sub find_archived_update_marc {
 
 sub cmd_less {
     #@ less [UPDATE [BATCH]] :: show records in an update or batch
-    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
     my ($start, @files) = find_marc($u, $b);
     system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
 }
@@ -2005,7 +2005,8 @@ sub throw {
 
 sub divide_update {
     my ($u, $opt, @ranges) = @_;
-    makedir("updates/$u/batches");
+    my $udir = "updates/$u";
+    makedir("$udir/batches");
     my @b = batches($u);
     my $count = count_update($u);
     my ($rs, $re) = (1, $count);  # Records remaining to be divided
@@ -2045,6 +2046,7 @@ sub divide_update {
         print STDERR "batch $b\n" if $opt->{'verbose'};
         mkbatch($u, $b) if !$opt->{'dry_run'};
     }
+    wrstatus($udir, INPROCESS) if !$opt->{'dry_run'};
     run_hook('divided', update => $u) if !$opt->{'dry_run'};
 }
 
@@ -2128,13 +2130,9 @@ sub prepare_batch {
         copy($err, \*STDERR) if -s $err;
         unlink $err if ! -s $err;
         wrstatus($bdir, ERROR);
-        wrstatus($udir, ERROR);
-        #wrstatus('.',   ERROR);
     }
     else {
         wrstatus($bdir, PREPARED);
-        wrstatus($udir, INPROCESS);
-        #wrstatus('.',   INPROCESS);
     }
     aplog('prep',
         'count' => $e - $s + 1,
