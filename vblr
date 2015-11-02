@@ -1200,11 +1200,11 @@ sub infer_update_and_batch {
     if (!defined $b) {
         if (!defined $u) {
             my @u = grep { my $s = rdstatus("updates/$_"); $s eq $ustat } updates();
-            fatal "Can't deduce an update" if !@u;
+            fatal "Can't infer an update" if !@u;
             ($u) = @u;
         }
         my @b = grep { my $s = rdstatus("updates/$u/batches/$_"); $s eq $bstat } batches($u);
-        fatal "Can't deduce a batch" if !@b;
+        fatal "Can't infer a batch" if !@b;
         ($b) = @b;
         askbool "Did you mean batch $b in update $u?" or return;
     }
@@ -1432,7 +1432,7 @@ sub cmd_www {
 
 sub cmd_cat {
     #@ cat [UPDATE [BATCH]] :: print records in an update or batch
-    my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
     usage if !defined $u;
     my $udir = "updates/$u";
     my $err;
