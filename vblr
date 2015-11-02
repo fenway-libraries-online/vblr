@@ -401,9 +401,12 @@ sub add_from_kits {
 sub autoload {
     my ($u, %opt) = @_;
     my $b = '1-n';
+    print STDERR "Dividing update...\n";
     divide_update($u, \%opt, $b);
+    print STDERR "Preparing records...\n";
     prepare_batch($u, $b, %opt);
     return if $opt{'debug'};
+    print STDERR "Loading records...\n";
     load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
@@ -3391,10 +3394,15 @@ sub add {
     my %marc = marc($file);
     my $count  = delete $marc{'count'};
     my $errors = delete $marc{'error-count'};
+    my $guard = $project->{'guard'};
     if ($errors) {
         print STDERR ERR, " $errors error(s) in $count records\n";
-        ask my $continue, 'Continue? ', 'N';
-        fatal "Cancelled" if $continue !~ /^[Yy]/;
+        askbool 'Continue?' or fatal "Cancelled";
+    }
+    elsif (defined $guard && $count > $guard) {
+        print STDERR "Record count $count exceeds guard threshold $guard\n";
+        askbool 'Continue?' or fatal "Cancelled";
+        print STDERR OK, " $count records\n";
     }
     else {
         print STDERR OK, " $count records\n";
