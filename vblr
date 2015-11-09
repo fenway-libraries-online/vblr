@@ -871,7 +871,7 @@ sub cmd_batches {
 
 sub cmd_archive {
     #@ archive [-av] [-A AGE] :: Archive one or more updates
-    my ($verbose, %ustat);
+    my ($verbose, $dry_run, %ustat);
     GetOptions(
         'a|all' => sub {
             push @ARGV, grep {
@@ -881,16 +881,23 @@ sub cmd_archive {
         'A|age=s' => sub {
             my $filter = file_age_filter($_[1]);
             push @ARGV, grep {
-                $filter->("updates/$_") ? ($_) : ()
+                $filter->("updates/$_") && ( $ustat{$_} ||= rdstatus("updates/$_") ) eq FINISHED
+                    ? ($_) : ()
             } updates();
         },
         'v|verbose' => \$verbose,
+        'n|dry-run' => sub { $verbose = $dry_run = 1 },
     ) or usage;
+    my $total = 0;
     foreach (unique(@ARGV)) {
-        printf STDERR "%7d %s\n", count_update($_), $_ if $verbose;
-        archive_update($_);
+        my $count = count_update($_);
+        printf STDERR "%7d %s\n", $count, $_ if $verbose;
+        archive_update($_) if !$dry_run;
+        $total += $count;
     }
-    print STDERR "Nothing to archive\n" if $verbose && !@ARGV;
+    if ($verbose) {
+        printf STDERR @ARGV ? ("%7d total\n", $total) : ("Nothing to archive\n");
+    }
 }
 
 sub cmd_unarchive {
