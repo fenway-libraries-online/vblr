@@ -784,21 +784,29 @@ sub cmd_groups {
 }
 
 sub cmd_projects {
-    #@ projects [STATUS] :: List projects (with specified status)
-    usage if @ARGV > 1;
+    #@ projects [[!]STATUS...] :: List projects (with[out] specified statuses)
     my $verbose;
     GetOptions( 'v|verbose'  => \$verbose ) or usage;
     fatal "Can't chdir $root: $!" if !chdir $root;
-    my ($s) = @ARGV;
-    $s =~ s/^\@?/\@/ if defined $s;
-    my $filter = defined($s) ? sub { rdstatus($_) eq $s } : sub { 1 };
-    my @proj = map {
+    my %want;
+    my %snot = map { /^!(.+)/ ? ('@'.$1 => 1) : () } @ARGV;
+    my %sreq = map { /^([^!].*)/ ? ('@'.$1 => 1) : () } @ARGV;
+    if (%sreq) {
+        usage if scalar(keys %sreq) != @ARGV;
+        %want = %sreq;
+    }
+    else {
+        %want = map { $_->[0] => 1 } @statuses;
+        delete @want{keys %snot};
+    }
+    my %pstat = map {
         my $link = readlink($_);
-        $link =~ m{^$root/(.+)$} && -f "$link/project.kv" && $filter->() ? ($1) : ();
+        $link =~ m{^$root/(.+)$} && -f "$link/project.kv" ? ($1 => rdstatus($_)) : ();
     } files("$root/id/*");
-    foreach my $p (sort @proj) {
+    foreach my $p (sort keys %pstat) {
+        my $pstat = $pstat{$p};
+        next if !$want{$pstat};
         if ($verbose) {
-            my $pstat = rdstatus($p);
             printf "%s %s\n", $pstat, $p;
         }
         else {
