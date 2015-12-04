@@ -2446,6 +2446,7 @@ sub archive_update {
     fatal "No such update: $u" if ! -d $udir;
     my $ustat = rdstatus($udir);
     fatal "Only finished updates may be archived" if $ustat ne FINISHED;
+    my $mtime = mtime("$udir/$ustat");
     wrstatus($udir, ARCHIVING);
     my @files = sort grep { !/^[.@]/ && $_ ne 'update.kv' } map { basename($_) } glob("$udir/*");
     my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
@@ -2459,6 +2460,7 @@ sub archive_update {
         wrstatus($udir, $ustat);
         fatal $@;
     };
+    utime $mtime, $mtime, $udir;
     wrstatus($udir, ARCHIVED);
     aplast('archive', 'update' => $u);
 }
@@ -2473,6 +2475,7 @@ sub unarchive_update {
     fatal "No such update: $u" if ! -d $udir;
     my $ustat = rdstatus($udir);
     fatal "Only archived updates may be unarchived" if $ustat ne ARCHIVED;
+    my $mtime = mtime($udir);
     wrstatus($udir, ARCHIVING);
     my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
     eval {
@@ -2484,6 +2487,7 @@ sub unarchive_update {
         wrstatus($udir, ARCHIVED);
         fatal $@;
     };
+    utime $mtime, $mtime, $udir.'/'.ARCHIVED;
     wrstatus($udir, FINISHED);
     aplast('unarchive', 'update' => $u);
 }
