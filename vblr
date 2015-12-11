@@ -1666,7 +1666,7 @@ sub cmd_mkhtml {
     #@   -n         dry run
     #@   -z         compress output using gzip
     #@   -i         link 001 fields
-    #@   -g         autogenerate
+    #@   -g         generate source file (from Voyager) if it doesn't exist
     #@   -j JOB     show records from JOB
     #@   -S SET     show records from SET
     #@   -m DESC    brief description of the records
