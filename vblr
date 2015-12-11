@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.019);
+$VERSION = q(1.025);
 
 use String::Expando;
 use File::Kvpar;
@@ -185,7 +185,7 @@ GetOptions(
     'p|project=s' => \$pdir,
 ) or usage_commands;
 
-my %skip_orient = map { $_ => 1 } qw( init help projects groups www iddb );
+my %skip_orient = map { $_ => 1 } qw( init help version projects groups www iddb );
 my %iddb;
 
 my $cmd = shift @ARGV;
