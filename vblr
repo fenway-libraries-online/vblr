@@ -493,7 +493,7 @@ sub cmp_updates {
 }
 
 sub cmd_count {
-    #@ count [UPDATE [RANGE]] :: Count MARC records
+    #@ count [-v] [-a|-l|-L|-s STATUS] [UPDATE [RANGE]] :: Count MARC records
     my ($all, $verbose);
     my %status = map { $_->[0] => 1 }  @statuses;
     GetOptions(
