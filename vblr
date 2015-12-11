@@ -1662,6 +1662,16 @@ sub cmd_log {
 
 sub cmd_mkhtml {
     #@ mkhtml [-nzig] [-j JOB|-S SET] [-m DESC] [-o PATH] [-s URL] [UPD [BATCH]] :: Make a web page showing records
+    #@ Options:
+    #@   -n         dry run
+    #@   -z         compress output using gzip
+    #@   -i         link 001 fields
+    #@   -g         autogenerate
+    #@   -j JOB     show records from JOB
+    #@   -S SET     show records from SET
+    #@   -m DESC    brief description of the records
+    #@   -o PATH    file to create
+    #@   -s URL     stylesheet URL (repeatable)
     my $www = rdkvfile("$root/conf/www.kv");
     my $www_root = $www->{'file-root'};
     my $url_base = $www->{'url-base'};
@@ -3304,30 +3314,40 @@ sub cmd_help {
     goto &usage_commands if !@ARGV || @ARGV == 1 && $ARGV[0] eq 'commands';
     my ($commands, $wcmd, $wargs) = commands(@ARGV);
     while (@$commands) {
-        my ($cmd, $args, $desc) = @{ shift @$commands };
+        my ($cmd, $args, $desc, @notes) = @{ shift @$commands };
         print STDERR <<"EOS";
 vblr $cmd $args
-    $desc
+  $desc
 EOS
+        if (@notes) {
+            print '  ', $_, "\n" for @notes;
+        }
         print STDERR "\n" if @$commands;
     }
 }
 
 sub commands {
-    my %cmd = map { $_ => 1 } @_;
+    my %want = map { $_ => 1 } @_;
     open my $fh, '<', $0 or return;
     my ($wcmd, $wargs) = (0, 0);
     my ($lcmd, $largs);
     my @commands;
     while (<$fh>) {
-        next if !s/^\s*#@ (\S+)(?:\s+(.+))?\s+::\s+(.+)//;
-        next if %cmd && !$cmd{$1};
-        my ($cmd, $args, $desc) = ($1, $2 || '', $3);
-        chomp;
-        push @commands, [ $cmd, $args, ucfirst $desc ];
-        ($lcmd, $largs) = (length $cmd, length $args);
-        $wcmd = $lcmd if $lcmd > $wcmd;
-        $wargs = $largs if $largs > $wargs;
+        if (s/^\s*#@ (\S+)(?:\s+(.+))?\s+::\s+(.+)//) {
+            next if %want && !$want{$1};
+            my ($cmd, $args, $desc) = ($1, $2 || '', $3);
+            chomp;
+            ($lcmd, $largs) = (length $cmd, length $args);
+            $wcmd = $lcmd if $lcmd > $wcmd;
+            $wargs = $largs if $largs > $wargs;
+            my @cmd = ($cmd, $args, ucfirst $desc);;
+            push @commands, \@cmd;
+            while (<$fh>) {
+                last if !s/^\s*#@ //;
+                chomp;
+                push @cmd, $_;
+            }
+        }
     }
     close $fh;
     return ([ sort { lc $a->[0] cmp lc $b->[0] } @commands ], $wcmd, $wargs);
