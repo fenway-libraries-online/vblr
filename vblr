@@ -1821,14 +1821,18 @@ sub cmd_mkview {
 
 
 sub cmd_drops {
-    #@ drops [-MOj] UPDATE [BATCH] | JOB... :: list or output dropped records
+    #@ drops [-MOj] [-t TYPE] UPDATE [BATCH] | JOB... :: list or output dropped records
     my ($verbose, $jobs);
-    my ($marc, $original);
+    my ($marc, $original, %want);
     GetOptions(
         'M|marc-records' => \$marc,
         'O|original' => sub { $marc = $original = 1 },
         'v|verbose' => \$verbose,
         'j|jobs' => \$jobs,
+        't|type=s' => sub {
+            usage if $_[1] !~ /^(un[rm]|dis)/i;
+            $want{lc $1} = 1;
+        },
     ) or exit usage;
     my @jobs;
     if ($jobs) {
@@ -1865,6 +1869,7 @@ sub cmd_drops {
         my ($log) = files("$jdir/output/*.log");
         next if !defined $log;  # Huh?
         my @drops = drops($log);
+        @drops = grep { $want{$_->[1]} } @drops if %want;
         if ($marc) {
             my %dropped = map { $_->[0] + $offset => 1 } @drops;
             my $src = $original ? files("$udir/*.mrc") : "$jdir/records.mrc";
@@ -2675,6 +2680,12 @@ sub mkjobid {
     return $j;
 }
 
+sub mkfileid {
+    my $f;
+    do { $f = mkid('f') } while defined idval($f);
+    return $f;
+}
+
 sub cmp_batches_by_range {
     my ($ab, $ae) = (@$a{qw(begin end)});
     my ($bb, $be) = (@$b{qw(begin end)});
@@ -3471,6 +3482,10 @@ sub add {
     $copier->($file, "$udir/$filename")
         or fatal "Can't move/copy file $file to $udir/$filename: $!";
     # Write metadata and log
+    my $f = mkfileid('f');
+    my $fkey = sprintf('F%s/%s/%s', $project->{'id'}, $u, $filename);
+    idval($f => $fkey);
+    idval($fkey => $f);
     my %update;
     if (defined $proto) {
         my $prodir = "prototypes/$proto";
