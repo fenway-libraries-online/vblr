@@ -737,17 +737,18 @@ sub cmd_receive {
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     usage if @ARGV != 1;
     my ($what) = @ARGV;
-    if ($what =~ m{/request.kv$}) {
+    if ($what =~ m{/request\.kv$}) {
         $rq = $what;
+        $what = dirname($what);
     }
     elsif (-e "$what/request.kv") {
         $rq = "$what/request.kv";
     }
-    my $dest = 'inbox/' . basename($what);
-    makedir('inbox');
-    fatal "Can't overwrite $dest with $what"
-        if -e $dest;
-    if (defined $rq && -t) {
+    if (defined $rq && -t STDIN) {
+        my $dest = 'inbox/archive/' . basename($what);
+        makedir('inbox/archive');
+        fatal "Can't overwrite $dest with $what"
+            if -e $dest;
         my $request = rdkvfile($rq);
         my $rqproj = delete $request->{'project'};
         my @mrc = glob(dirname($rq).'/*.mrc');
@@ -783,10 +784,17 @@ EOS
             'update' => $u,
         );
         add(%opt);
+        move($what, $dest)
+            or fatal "Can't move $what to $dest: $!";
+        print $u, "\n" if !$opt{'quiet'}
     }
     else {
+        my $dest = 'inbox/' . basename($what);
+        makedir('inbox');
+        fatal "Can't overwrite $dest with $what"
+            if -e $dest;
         move($what, $dest)
-            or fatal "Can't move $what to the project inbox: $!";
+            or fatal "Can't move $what to $dest: $!";
         wrstatus('.', RECEIVED);
         aplog('received', 'what' => $what, defined $comment ? ('comment' => $comment) : ());
         aplast('received');
