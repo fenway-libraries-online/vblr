@@ -36,6 +36,12 @@ use constant UNRESOLVED => 'unresolved';
 use constant UNMATCHED  => 'unmatched';
 use constant MATCH   => 'match';
 
+my %purpose2human = (
+    ADD() => 'add records',
+    DELETE() => 'delete records',
+    REPLACE() => 'replace records',
+);
+
 # Record type
 use constant AUTHORITY => 'auth';
 use constant BIB => 'bib';
@@ -727,20 +733,65 @@ sub cmd_close {
 
 sub cmd_receive {
     #@ receive [-m COMMENT] FILE :: receive a file for a project
-    my $comment;
+    my ($comment, $rq);
     GetOptions( 'm|comment=s' => \$comment ) or usage;
     usage if @ARGV != 1;
     my ($what) = @ARGV;
+    if ($what =~ m{/request.kv$}) {
+        $rq = $what;
+    }
+    elsif (-e "$what/request.kv") {
+        $rq = "$what/request.kv";
+    }
     my $dest = 'inbox/' . basename($what);
     makedir('inbox');
     fatal "Can't overwrite $dest with $what"
         if -e $dest;
-    move($what, $dest)
-        or fatal "Can't move $what to the project inbox: $!";
-    wrstatus('.', RECEIVED);
-    aplog('received', 'what' => $what, defined $comment ? ('comment' => $comment) : ());
-    aplast('received');
-    run_hook('received', 'what' => $what);
+    if (defined $rq && -t) {
+        my $request = rdkvfile($rq);
+        my $rqproj = delete $request->{'project'};
+        my @mrc = glob(dirname($rq).'/*.mrc');
+        fatal "Can't receive: wrong project" if $rqproj ne $pcur;
+        fatal "Can't receive: multiple MARC files" if @mrc > 1;
+        fatal "Can't receive: no MARC file" if @mrc == 0;
+        my ($token, $descrip, $count, $notes) = @$request{qw(token descrip count notes)};
+        printf <<"EOS", $token, $descrip, $count, $mrc[0], $notes;
+Request:
+  token   %s
+  descrip %s
+  count   %d
+  file    %s
+  notes   %s
+EOS
+        my ($u, $purpose);
+        while (!defined $u) {
+            $u = strftime("%Y-%m", localtime);
+            ask $u, 'Update code: ', $u;
+            print(STDERR "An update named $u already exists"), undef $u if -d "updates/$u"
+        }
+        while (!defined $purpose) {
+            $purpose = ADD;
+            ask $purpose, 'Purpose: ', $purpose;
+            print(STDERR "No such purpose: $purpose"), undef $purpose if !exists $purpose2human{$purpose};
+        }
+        ask $descrip, 'Description: ', $descrip;
+        askbool 'Add? ' or fatal 'Cancelled';
+        my %opt = (
+            'purpose' => ADD,
+            'description' => $request->{'descrip'},
+            'file' => $mrc[0],
+            'update' => $u,
+        );
+        add(%opt);
+    }
+    else {
+        move($what, $dest)
+            or fatal "Can't move $what to the project inbox: $!";
+        wrstatus('.', RECEIVED);
+        aplog('received', 'what' => $what, defined $comment ? ('comment' => $comment) : ());
+        aplast('received');
+        run_hook('received', 'what' => $what);
+    }
 }
 
 sub cmd_finish {
@@ -1123,7 +1174,7 @@ sub cmd_last {
 
 sub cmd_configure {
     #@ configure [prep|load] :: Configure a project interactively if it needs it
-    fatal "Configuring must be done interactively" if ! -t 0;
+    fatal "Configuring must be done interactively" if ! -t STDIN;
     @ARGV = qw(prep load) if !@ARGV;
     configure(@ARGV);
 }
@@ -1563,7 +1614,7 @@ sub pipe_marc {
         ask $i, 'Which file? ';
         exit 0 if !defined $i;
     }
-    elsif ($wait && -t 0) {
+    elsif ($wait && -t STDIN) {
         print STDERR "Press <Enter> to view ", $files->[$i-1], ' ... ';
         my $str = <STDIN>;
         print STDERR "\n";
@@ -2612,7 +2663,7 @@ sub count_records_with_status {
 
 sub askbool($) {
     my ($prompt) = @_;
-    fatal "Can't ask for input in a non-interactive session" if ! -t 0;
+    fatal "Can't ask for input in a non-interactive session" if ! -t STDIN;
     print STDERR $prompt, ' [yN] ';
     my $val = <STDIN>;
     return bool($val);
@@ -2622,7 +2673,7 @@ sub bool { defined $_[0] && $_[0] =~ /^[TtYy1]/ }
 
 sub ask(\$$;$) {
     my ($ref, $prompt, $default) = @_;
-    if (! -t 0) {
+    if (! -t STDIN) {
         fatal "Can't ask for input in a non-interactive session" if !defined $default;
         $$ref = $default;
         return;
