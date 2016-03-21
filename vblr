@@ -752,7 +752,7 @@ sub cmd_receive {
         my $request = rdkvfile($rq);
         my $rqproj = delete $request->{'project'};
         my @mrc = glob(dirname($rq).'/*.mrc');
-        fatal "Can't receive: wrong project" if $rqproj ne $pcur;
+        fatal "Can't receive: wrong project" if defined($rqproj) && length($rqproj) && $rqproj ne $pcur;
         fatal "Can't receive: multiple MARC files" if @mrc > 1;
         fatal "Can't receive: no MARC file" if @mrc == 0;
         my ($token, $descrip, $count, $notes) = @$request{qw(token descrip count notes)};
