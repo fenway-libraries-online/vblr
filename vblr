@@ -732,11 +732,11 @@ sub cmd_close {
 }
 
 sub cmd_receive {
-    #@ receive [-m COMMENT] FILE :: receive a file for a project
+    #@ receive [-m COMMENT] FILE [UPDATE] :: receive a file for a project
     my ($comment, $rq);
     GetOptions( 'm|comment=s' => \$comment ) or usage;
-    usage if @ARGV != 1;
-    my ($what) = @ARGV;
+    usage if @ARGV == 0 || @ARGV > 2;
+    my ($what, $u) = @ARGV;
     if ($what =~ m{/request\.kv$}) {
         $rq = $what;
         $what = dirname($what);
@@ -764,7 +764,7 @@ Request:
   file    %s
   notes   %s
 EOS
-        my ($u, $purpose);
+        my $purpose;
         while (!defined $u) {
             $u = strftime("%Y-%m", localtime);
             ask $u, 'Update code: ', $u;
