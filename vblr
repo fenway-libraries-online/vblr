@@ -2183,7 +2183,7 @@ sub prepare_batch {
         if (($status = system $cmd) != 0) {
             print STDERR "Record prep failed; stderr follows\n";
         }
-        elsif (($status = system(qw(marcdiag -s -q), $out)) != 0) {
+        elsif (($status = system(qw(marcdiag -s -q -o), $out)) != 0) {
             print STDERR "Record prep produced an invalid file\n";
         }
         else {
