@@ -2234,6 +2234,7 @@ sub prepare_batch {
         'error' => $status,
         'ready' => 0,
     );
+    fatal "Record prep failed" if $result eq ERR;
     aplast('prep', update => $u, batch => $b);
     apnext('check', update => $u, batch => $b);
     if ($opt{'gen_html'}) {
