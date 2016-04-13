@@ -3893,7 +3893,8 @@ sub find {
 
 sub cmd_iddb {
     #@ iddb [-c -j PROJ/UPDATE/BATCH [NOTE] | [-kBpjavd] [KEY]...] :: create a job ID or otherwise manage the ID database
-    my (%type, $create, $keys_only, $brief, $verbose, $deref);
+    my (%type, $create, $keys_only, $brief, $verbose);
+    my $deref = 1;
     GetOptions(
         'k|keys-only' => \$keys_only,
         'B|brief'     => \$brief,
@@ -3903,6 +3904,7 @@ sub cmd_iddb {
         'c|create'   => \$create,
         'v|verbose' => \$verbose,
         'd|deref'   => \$deref,
+        'D|no-deref' => sub { undef $deref },
     ) or usage;
     if ($create) {
         usage if !@ARGV;
