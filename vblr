@@ -3548,9 +3548,8 @@ sub add {
     idval($fkey => $f);
     my %update;
     if (defined $proto) {
-        my ($prodir, @etc) = grep { -e "$_/update.kv" } ( $proto =~ m{/} ? ($proto) : ("prototypes/$proto", "updates/$proto", "$root/prototypes/$proto") );
+        my ($prodir) = grep { -e "$_/update.kv" } ( $proto =~ m{/} ? ($proto) : ("prototypes/$proto", "updates/$proto", "$root/prototypes/$proto") );
         fatal "Can't resolve prototype $proto: not found" if !defined $prodir;
-        fatal "Can't resolve prototype $proto: $prodir @etc" if @etc;
         copy_bin($prodir, $udir)  if -d "$prodir/bin";
         copy_conf($prodir, $udir) if -d "$prodir/conf";
         my %proto = %{ rdkvfile("$prodir/update.kv") };
