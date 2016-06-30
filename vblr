@@ -313,6 +313,7 @@ sub cmd_base {
 sub cmd_add {
     #@ add [-CLRikvx] [-p PROTO] [-m DESCRIP] FILE|KIT [NAME] :: Add a MARC file to the project
     my (%opt, %meta);
+    $opt{'verbose'} = 1 if -t STDIN;
     GetOptions(
         'k|from-kits'     => \$opt{'kits'},
         'L|auto-load'     => \$opt{'autoload'},
@@ -347,6 +348,7 @@ sub cmd_add {
     else {
         usage if @ARGV > 2 || @ARGV < 1;
         my ($file, $u) = @ARGV;
+        fatal "No such file: $file" if ! -f $file;
         ask $u, 'Update code: ', strftime("%Y-%m", localtime) if !defined $u;
         ask $opt{'description'}, 'Description: ' if !defined $opt{'description'};
         @opt{qw(file update)} = ($file, $u);
@@ -401,18 +403,21 @@ sub add_from_kits {
             $_++ for values %seq;
         }
     }
+    continue {
+        print STDERR "\n";
+    }
     return @updates;
 }
 
 sub autoload {
     my ($u, %opt) = @_;
     my $b = '1-n';
-    print STDERR "Dividing update...\n";
+    print STDERR "Dividing update...\n" if $opt{'verbose'};
     divide_update($u, \%opt, $b);
-    print STDERR "Preparing records...\n";
+    print STDERR "Preparing records...\n" if $opt{'verbose'};
     prepare_batch($u, $b, %opt);
     return if $opt{'debug'};
-    print STDERR "Loading records...\n";
+    print STDERR "Loading records...\n" if $opt{'verbose'};
     load_batch($u, $b, %opt, 'autogen_loaded' => 1, 'gen_html' => 1);
     finish_update($u);
 }
@@ -1190,6 +1195,7 @@ sub cmd_configure {
 sub cmd_load {
     #@ load [-vn] [UPDATE [RANGE]] :: Load records into Voyager
     my ($delete, $verbose, $dry_run);
+    $verbose = 1 if -t STDIN;
     my $autogen_loaded = 1;
     my $gen_html = 1;
     GetOptions(
@@ -1735,7 +1741,7 @@ sub cmd_mkhtml {
     my $www_root = $www->{'file-root'};
     my $url_base = $www->{'url-base'};
     my ($j, $s);
-    my ($dry_run, $title, $description, $inmarc, $outhtml, $outmarc, $link001, $autogen, $gzip);
+    my ($dry_run, $title, $description, $inmarc, $outhtml, $outmarc, $link001, $autogen, $gzip, $verbose);
     my @stylesheets;
     GetOptions(
         'n'   => \$dry_run,
@@ -1748,6 +1754,7 @@ sub cmd_mkhtml {
         'i'   => \$link001,
         'g'   => \$autogen,
         'z'   => \$gzip,
+        'v'   => \$verbose,
     ) or usage;
     @stylesheets = qw(/records/styles.css) if !@stylesheets;
     my ($u, $b) = resolve_update_and_batch(@ARGV);
@@ -1847,7 +1854,7 @@ sub cmd_mkhtml {
         print STDERR "URL:     $url\n";
         exit 0;
     }
-    print STDERR "URL: $url\n";
+    print STDERR "URL: $url\n" if $verbose;
     my $predir = "$www_root/$code/preview";
     makedir(dirname(dirname($predir)), dirname($predir), $predir);
     my ($copy, $err);
@@ -1860,10 +1867,12 @@ sub cmd_mkhtml {
         $copy = \&copy;
         $err = sub { fatal "copy to $_[0] failed: $!" };
     }
-    print STDERR "Generating output files:\n";
-    for ($outhtml, $outmarc) {
-        $_ = $predir . '/' . $_;
-        print STDERR $_, "\n";
+    if ($verbose) {
+        print STDERR "Generating output files:\n";
+        for ($outhtml, $outmarc) {
+            $_ = $predir . '/' . $_;
+            print STDERR $_, "\n";
+        }
     }
     open my $fh, '-|', @cmd or die "Can't run marc2html: $!";
     $copy->($fh,     $outhtml) or $err->($outhtml);
@@ -2349,7 +2358,7 @@ sub load_batch {
     }
     else {
         $result = $job->{'result'} = ERR;
-        print STDERR "Record load failed\n" if $opt{'verbose'};
+        print STDERR "Record load failed\n";
         wrstatus($jdir, ERROR);
         wrstatus($bdir, ERROR);
     }
@@ -3500,7 +3509,12 @@ sub add {
     my %arg = @_;
     my ($purpose, $proto, $u, $file, $descrip, $copy, $redo, $meta) = @arg{qw(purpose prototype update file description copy redo meta)};
     # Look at the file
-    print STDERR "Checking file $file...\n";
+    if ($arg{'verbose'}) {
+        print STDERR "Checking file $file...\n";
+    }
+    else {
+        print STDERR "File: $file\n";
+    }
     my %marc = marc($file);
     my $count  = delete $marc{'count'};
     my $errors = delete $marc{'error-count'};
