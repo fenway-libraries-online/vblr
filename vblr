@@ -1740,8 +1740,9 @@ sub cmd_mkhtml {
     my $www = rdkvfile("$root/conf/www.kv");
     my $www_root = $www->{'file-root'};
     my $url_base = $www->{'url-base'};
+    my $gzip = bool($www->{'compress'});
     my ($j, $s);
-    my ($dry_run, $title, $description, $inmarc, $outhtml, $outmarc, $link001, $autogen, $gzip, $verbose);
+    my ($dry_run, $title, $description, $inmarc, $outhtml, $outmarc, $link001, $autogen, $verbose);
     my @stylesheets;
     GetOptions(
         'n'   => \$dry_run,
@@ -2247,7 +2248,7 @@ sub prepare_batch {
     aplast('prep', update => $u, batch => $b);
     apnext('check', update => $u, batch => $b);
     if ($opt{'gen_html'}) {
-        local @ARGV = ('-z', $u, $b);
+        local @ARGV = ($u, $b);
         cmd_mkhtml();
     }
     run_hook('prepared', update => $u, batch => $b);
@@ -2390,7 +2391,7 @@ sub load_batch {
         copy($fh, "$jdir/loaded.mrc");
     }
     if ($opt{'gen_html'} && $e - $s + 1 <= 5000) {
-        local @ARGV = ('-z', '-j' => $j);
+        local @ARGV = ('-j' => $j);
         cmd_mkhtml();
     }
     mkdrops($j) if $job->{'discard'} > 0;
