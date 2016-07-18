@@ -794,7 +794,7 @@ EOS
         if ($purpose eq DELETE && files("prototypes/deletes/update.kv")) {
             $opt{'proto'} = 'deletes' if askbool 'Use existing prototype for deletes? ';
         }
-        elsif ($purpose eq UPDATE && files("prototypes/updates/update.kv")) {
+        elsif ($purpose eq REPLACE && files("prototypes/updates/update.kv")) {
             $opt{'proto'} = 'updates' if askbool 'Use existing prototype for updates? ';
         }
         askbool 'Add to project? ' or fatal 'Cancelled';
