@@ -781,10 +781,10 @@ EOS
             print(STDERR "No such purpose: $purpose"), undef $purpose if !exists $purpose2human{$purpose};
         }
         ask $descrip, 'Description: ', $descrip;
-        askbool 'Add? ' or fatal 'Cancelled';
+        askbool 'Add to project? ' or fatal 'Cancelled';
         my %opt = (
-            'purpose' => ADD,
-            'description' => $request->{'descrip'},
+            'purpose' => $purpose,
+            'description' => $descrip,
             'file' => $mrc[0],
             'update' => $u,
         );
