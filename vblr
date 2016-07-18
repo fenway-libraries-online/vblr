@@ -738,8 +738,12 @@ sub cmd_close {
 
 sub cmd_receive {
     #@ receive [-m COMMENT] FILE [UPDATE] :: receive a file for a project
-    my ($comment, $rq);
-    GetOptions( 'm|comment=s' => \$comment ) or usage;
+    my ($comment, $rq, $purpose);
+    GetOptions(
+        'm|comment=s' => \$comment,
+        'u|purpose=s' => \$purpose,
+        'x' => sub { $purpose = DELETE },
+    ) or usage;
     usage if @ARGV == 0 || @ARGV > 2;
     my ($what, $u) = @ARGV;
     if ($what =~ m{/request\.kv$}) {
@@ -761,6 +765,7 @@ sub cmd_receive {
         fatal "Can't receive: multiple MARC files" if @mrc > 1;
         fatal "Can't receive: no MARC file" if @mrc == 0;
         my ($token, $descrip, $count, $notes) = @$request{qw(token descrip count notes)};
+        $descrip = $comment if defined $comment;
         printf <<"EOS", $token, $descrip, $count, $mrc[0], $notes;
 Request:
   token   %s
@@ -769,7 +774,6 @@ Request:
   file    %s
   notes   %s
 EOS
-        my $purpose;
         while (!defined $u) {
             $u = strftime("%Y-%m", localtime);
             ask $u, 'Update code: ', $u;
@@ -781,13 +785,19 @@ EOS
             print(STDERR "No such purpose: $purpose"), undef $purpose if !exists $purpose2human{$purpose};
         }
         ask $descrip, 'Description: ', $descrip;
-        askbool 'Add to project? ' or fatal 'Cancelled';
         my %opt = (
             'purpose' => $purpose,
             'description' => $descrip,
             'file' => $mrc[0],
             'update' => $u,
         );
+        if ($purpose eq DELETE && files("prototypes/deletes/update.kv")) {
+            $opt{'proto'} = 'deletes' if askbool 'Use existing prototype for deletes? ';
+        }
+        elsif ($purpose eq UPDATE && files("prototypes/updates/update.kv")) {
+            $opt{'proto'} = 'updates' if askbool 'Use existing prototype for updates? ';
+        }
+        askbool 'Add to project? ' or fatal 'Cancelled';
         add(%opt);
         move($what, $dest)
             or fatal "Can't move $what to $dest: $!";
