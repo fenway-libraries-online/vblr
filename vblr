@@ -2332,6 +2332,9 @@ sub load_batch {
     elsif ($interleaved) {
         push @cmd, '-m', '-i' => $profile;
     }
+    else {
+        push @cmd, '-i' => $profile;
+    }
     if ($opt{'dry_run'}) {
         print STDERR join(' ', 'command:', @cmd), "\n";
         return;
