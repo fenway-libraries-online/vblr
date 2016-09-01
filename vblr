@@ -2177,7 +2177,10 @@ sub prepare_batch {
     my $udir = "updates/$u";
     my $bdir = "$udir/batches/$b";
     fatal "No batch $b in update $u" if ! -e $bdir;
-    my $prep = find('bin/prep', $bdir, $udir, '.');
+    my $update = rdupdate($u);
+    my $purpose = $update->{'purpose'} || ADD;
+    my $prep = find('bin/prep.' . $purpose, $bdir, $udir, '.')
+            || find('bin/prep', $bdir, $udir, '.');
     fatal "No record prep script" if !$prep || !-x $prep || -d $prep;
     my ($cfile) = find('conf/prep.kv', $bdir, $udir, '.');
     fatal "No record prep config" if !$cfile || -d $cfile;
@@ -2194,8 +2197,6 @@ sub prepare_batch {
     makedir("$prepdir/bin", "$prepdir/conf");
     copy($prep, "$prepdir/bin/prep.used");
     copy($cfile, "$prepdir/conf/prep.kv.used");
-    my $update = rdupdate($u);
-    my $purpose = $update->{'purpose'} || ADD;
     my $status;
     my $result = ERR;
     {
@@ -2203,6 +2204,7 @@ sub prepare_batch {
         local $ENV{'VBLR_UPDATE' } = $u;
         local $ENV{'VBLR_BATCH'  } = $b;
         local $ENV{'VBLR_PURPOSE'} = $purpose;
+        local $ENV{'VBLR_CONFDIR'} = dirname($cfile);
         if (($status = system $cmd) != 0) {
             print STDERR "Record prep failed; stderr follows\n";
         }
@@ -3917,7 +3919,8 @@ sub find {
     my $f = shift;
     return $f if $f =~ m{^/} && -e $f;
     my @files = files(map { "$_/$f" } @_);
-    return shift @files;
+    return if !@files;
+    shift @files;
 }
 
 sub cmd_iddb {
