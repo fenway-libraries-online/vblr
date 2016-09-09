@@ -3931,7 +3931,7 @@ sub find {
 
 sub cmd_iddb {
     #@ iddb [-c -j PROJ/UPDATE/BATCH [NOTE] | [-kBpjavd] [KEY]...] :: create a job ID or otherwise manage the ID database
-    my (%type, $create, $keys_only, $brief, $verbose);
+    my (%type, $create, $list, $keys_only, $brief, $verbose);
     my $deref = 1;
     GetOptions(
         'k|keys-only' => \$keys_only,
@@ -3943,15 +3943,17 @@ sub cmd_iddb {
         'v|verbose' => \$verbose,
         'd|deref'   => \$deref,
         'D|no-deref' => sub { undef $deref },
+        'l|list' => \$list,
     ) or usage;
     if ($create) {
-        usage if !@ARGV;
+        usage if $list || !@ARGV;
         keys(%type) == 1 && $type{'j'} or usage;
         my $j = mkjobid();
         idval($j => join(' ', @ARGV));
         print $j, "\n";
     }
     elsif (@ARGV) {
+        usage if $list;
         foreach my $k (@ARGV) {
             my $v = idval($k);
             if ($deref && defined($v) && $v =~ m{^(p[^/]+)/(.+)}) {
@@ -3963,7 +3965,8 @@ sub cmd_iddb {
             print $brief ? ($v, "\n") : ($k, ' ', $v, "\n");
         }
     }
-    elsif (%type || $keys_only) {
+    elsif ($list || %type || $keys_only) {
+        %type = qw(j 1 p 1) if !keys %type;
         my @keys = sort(idkeys(keys %type));
         if ($keys_only) {
             print $_, "\n" for @keys;
