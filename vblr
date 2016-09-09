@@ -1206,7 +1206,7 @@ sub cmd_configure {
 }
 
 sub cmd_load {
-    #@ load [-vn] [UPDATE [RANGE]] :: Load records into Voyager
+    #@ load [-vnxGH] [UPDATE [RANGE]] :: Load records into Voyager
     my ($delete, $verbose, $dry_run);
     $verbose = 1 if -t STDIN;
     my $autogen_loaded = 1;
@@ -1421,7 +1421,7 @@ sub cmd_res1 {
 sub cmd_list { goto &cmd_ls }
 
 sub cmd_ls {
-    #@ ls [-v] :: List updates, batches, or record loads
+    #@ ls [-v] :: List updates, batches, or jobs
     my $verbose;
     GetOptions(
         'v|verbose' => \$verbose,
@@ -1435,8 +1435,8 @@ sub cmd_ls {
     my ($u, $b) = resolve_update_and_batch(@ARGV);
     my ($type, @list);
     if (defined $b) {
-        # List loads of the current batch
-        ($type, @list) = ('loads', rdlist("updates/$u/batches/$b/\@loaded"));
+        # List jobs of the current batch
+        ($type, @list) = ('jobs', rdlist("updates/$u/batches/$b/jobs"));
     }
     elsif (defined $u) {
         ($type, @list) = ('batches', rdlist("updates/$u/batches"));
