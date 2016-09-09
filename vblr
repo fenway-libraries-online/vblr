@@ -753,6 +753,9 @@ sub cmd_receive {
     elsif (-e "$what/request.kv") {
         $rq = "$what/request.kv";
     }
+    elsif (!-f $what) {
+        $rq = find("$what/request.kv", "$pdir/inbox", "$root/inbox");
+    }
     if (defined $rq && -t STDIN) {
         my $dest = 'inbox/archive/' . basename($what);
         makedir('inbox/archive');
