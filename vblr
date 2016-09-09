@@ -1163,7 +1163,7 @@ sub cmd_prep {
 }
 
 sub cmd_last {
-    #@ last [COUNT] update|batch|job [UPDATE [BATCH]]
+    #@ last [-v] [COUNT] update[s]|batch[es]|job[s]
     my $verbose;
     GetOptions(
         'v|verbose' => \$verbose,
