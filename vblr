@@ -757,7 +757,7 @@ sub cmd_receive {
         $rq = find("$what/request.kv", "$pdir/inbox", "$root/inbox");
     }
     if (defined $rq && -t STDIN) {
-        my $dest = 'inbox/archive/' . basename($what);
+        my $dest = 'inbox/archive/' . basename(dirname($rq));
         makedir('inbox/archive');
         fatal "Can't overwrite $dest with $what"
             if -e $dest;
