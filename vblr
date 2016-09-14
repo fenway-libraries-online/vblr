@@ -2505,7 +2505,7 @@ sub project_count_pretty {
     my ($p) = @_;
     my $f = find('bin/count', '.');
     return '' if !defined $f;
-    my $n = qx($f);
+    my $n = qx($f -a);
     chomp $n;
     commify($n);
 }
