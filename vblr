@@ -2191,9 +2191,9 @@ sub prepare_batch {
     my $out  = join('/', $bdir, PREPARING, 'records.mrc');
     my $err  = join('/', $bdir, PREPARING, 'prep.err');
     my $cmd  = "marcn -h $b < $in | $prep -c $cfile -u $u -b $b > $out 2> $err";
-    if ($opt{'dry_run'}) {
+    if ($opt{'verbose'}) {
         print STDERR "command: $cmd\n";
-        return;
+        return if $opt{'dry_run'};
     }
     wrstatus($bdir, PREPARING);
     my $prepdir = join('/', $bdir, PREPARING);
@@ -2208,6 +2208,11 @@ sub prepare_batch {
         local $ENV{'VBLR_BATCH'  } = $b;
         local $ENV{'VBLR_PURPOSE'} = $purpose;
         local $ENV{'VBLR_CONFDIR'} = dirname($cfile);
+        if ($opt{'verbose'}) {
+            foreach (grep { /^VBLR_/ } keys %ENV) {
+                print STDERR "env: $_=$ENV{$_}\n";
+            }
+        }
         if (($status = system $cmd) != 0) {
             print STDERR "Record prep failed; stderr follows\n";
         }
