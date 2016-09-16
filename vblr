@@ -823,12 +823,14 @@ EOS
 
 sub cmd_finish {
     #@ finish [-v] [UPDATE [BATCH]] :: finish an update or batch
-    my ($verbose);
+    my ($verbose, $force);
     GetOptions(
         'v|verbose' => \$verbose,
+        'f|force' => \$force,
     ) or usage;
     usage if @ARGV > 2;
     if (@ARGV == 0) {
+        $force or askbool "Are you sure you want to finish the entire project? " or fatal 'Cancelled';
         wrstatus('.', FINISHED);
         aplog('finish');
         aplast('finish');
