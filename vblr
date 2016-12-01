@@ -758,8 +758,9 @@ sub cmd_receive {
     if ($what =~ m{/request\.kv$}) {
         $rq = $what;
         $what = dirname($what);
+        $what = basename($what) if !-e $what;
     }
-    elsif (-e "$what/request.kv") {
+    if (-e "$what/request.kv") {
         $rq = "$what/request.kv";
     }
     elsif (!-f $what) {
