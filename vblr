@@ -765,7 +765,10 @@ sub cmd_receive {
     }
     elsif (!-f $what) {
         $rq = find("$what/request.kv", "$pdir/inbox", "$root/inbox");
-        $what = dirname($rq) if defined $rq;
+        if (defined $rq) {
+            print STDERR "Found record load request at $rq\n";
+            $what = dirname($rq);
+        }
     }
     if (defined $rq && -t STDIN) {
         my $dest = 'inbox/archive/' . basename(dirname($rq));
