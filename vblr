@@ -382,13 +382,22 @@ sub add_from_kits {
                 print STDERR "Missing file in kit $k: $path\n";
                 next;
             }
-            my %ctx = ( 'file' => $file, 'sequence' => \%seq );
+            my %ctx = (
+                'file' => $file,
+                'sequence' => \%seq,
+                'now' => { 'date' => $now },
+            );
             my $purp = $file->{'purpose'}
                 or fatal "File has no purpose: $name";
-            my $case    = $conf{$purp};
+            my $case = $conf{$purp}
+                or fatal "Config file conf/add.kv has no \@case stanza for purpose '$purp'";
             my $proto   = $opt{'prototype'}   || $case->{'prototype'};
             my $descrip = $opt{'description'} || $expando->expand($case->{'description'}, \%ctx);
             my $u       = $opt{'update'}      || $expando->expand($case->{'code'},        \%ctx);
+            if (-d "updates/$u") {
+                print STDERR "An update named $u already exists";
+                next;
+            }
             push @updates, $u;
             $opt{$_} ||= bool($case->{$_}) for qw(copy historical redo);
             add(
@@ -1486,7 +1495,7 @@ sub cmd_match {
     open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
         or fatal "Can't run vbirule: $!";
     my @actions = map { split /\s+/ } <$fh1>;
-    my ($warn, $replace, @params) = split /\s/, qx/vmatchparams $profile/;
+    my ($warn, $replace, @params) = split /\s/, qx/vmatchparams -x $profile/;
     open my $fh2, '-|', qw(vmatch -P -H), '-w' => $warn, '-r' => $replace, '-f' => $files[0], @params
         or fatal "Can't run vmatch: $!";
     local $/ = '';
