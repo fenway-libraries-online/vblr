@@ -808,11 +808,13 @@ EOS
             'file' => $mrc[0],
             'update' => $u,
         );
-        if ($purpose eq DELETE && files("prototypes/deletes/update.kv")) {
-            $opt{'prototype'} = 'deletes' if askbool 'Use existing prototype for deletes? ';
+        if ($purpose eq DELETE) {
+            my @files = files("prototypes/deletes/update.kv", "$root/prototypes/deletes/update.kv");
+            $opt{'prototype'} = 'deletes' if @files && askbool 'Use existing prototype for deletes? ';
         }
-        elsif ($purpose eq REPLACE && files("prototypes/updates/update.kv")) {
-            $opt{'prototype'} = 'updates' if askbool 'Use existing prototype for updates? ';
+        elsif ($purpose eq REPLACE) {
+            my @files = files("prototypes/updates/update.kv", "$root/prototypes/updates/update.kv");
+            $opt{'prototype'} = 'updates' if @files && askbool 'Use existing prototype for updates? ';
         }
         askbool 'Add to project? ' or fatal 'Cancelled';
         add(%opt);
