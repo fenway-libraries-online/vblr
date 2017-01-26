@@ -823,6 +823,7 @@ EOS
         print $u, "\n" if !$opt{'quiet'}
     }
     else {
+        print STDERR "Moving $what to project inbox; you must add it manually using _vblr add_\n";
         my $dest = 'inbox/' . basename($what);
         makedir('inbox');
         fatal "Can't overwrite $dest with $what"
@@ -1678,6 +1679,24 @@ sub cmd_version {
     my $vblr = vblr();
     my ($version, $date) = @$vblr{qw(version date)};
     print STDERR "vblr version $version last modified $date\n";
+}
+
+sub cmd_check {
+    #@ check :: Look for problems in a file or file kit
+    my $err = 0;
+    foreach my $file (@ARGV) {
+        if ($file =~ /\.kit$/) {
+            $err++ if !check_kit($file);
+        }
+        elsif ($file =~ /\.mrc$/) {
+            $err++ if !check_marc_file($file);
+        }
+        else {
+            print STDERR "unrecognized file: $file\n";
+            $err++;
+        }
+    }
+    exit $err;
 }
 
 sub cmd_log {
@@ -4285,6 +4304,52 @@ sub mtime {
     my @stat = stat $f;
     die "Can't stat $f: $!" if !@stat;
     return $stat[9];
+}
+
+sub check_kit {
+    my ($k) = @_;
+    my $kit = File::Kit->new($k)
+        or fatal "Can't open kit $k";
+    my $dir = $kit->path . '/files';
+    my $bad;
+    foreach my $file ($kit->files) {
+        my $name = $file->{'name'};
+        my $path = "$dir/$name";
+        if (!-f $path) {
+            print STDERR "Missing file in kit $k: $path\n";
+            $bad = 1;
+        }
+        elsif ($name !~ /\.mrc$/) {
+            print STDERR "Non-MARC file in kit $k: $path\n";
+            $bad = 1;
+        }
+        else {
+            $bad = !check_file($path);
+        }
+    }
+    return !$bad;
+}
+
+sub check_marc_file {
+    my ($f) = @_;
+    print STDERR "Checking file $f...\n";
+    my $n = count($f);
+    my $bad;
+    if ($project && $n > ($project->{'guard'} ||= 1_000_000)) {
+        print STDERR "Record count $n exceeds guard threshold $project->{'guard'}\n";
+        $bad = 1;
+    }
+    open my $fh, '-|', qw(marcdiag -peOso), $f or fatal "exec marcdiag: $!";
+    my @out;
+    while (<$fh>) {
+        chomp, push(@out, $_), next if s/^SUMM //;
+        $bad = 1 if /^FAIL/;
+    }
+    if ($bad) {
+        print STDERR "There were errors:\n";
+        print $_, "\n" for grep { !/Error counts/ } @out;
+    }
+    return !$bad;
 }
 
 # vim:set nu:
