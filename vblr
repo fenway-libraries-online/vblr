@@ -4346,7 +4346,7 @@ sub check_marc_file {
         $bad = 1 if /^FAIL/;
     }
     if ($bad) {
-        print STDERR "There were errors:\n";
+        print STDERR "This file has errors that must be corrected by the project's record prep script:\n";
         print $_, "\n" for grep { !/Error counts/ } @out;
     }
     return !$bad;
