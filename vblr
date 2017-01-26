@@ -1680,57 +1680,6 @@ sub cmd_version {
     print STDERR "vblr version $version last modified $date\n";
 }
 
-sub cmd_check {
-    #@ check :: Check a project's file tree
-    if (tdir('updates')) {
-        if (tlink('base', 'updates/BASE')) {
-            tcount('updates/BASE/*.mrc', 1);
-        }
-        foreach (files('updates/*')) {
-            tcount("$_/*.mrc", 1);
-            tfile("$_/update.kv");
-            my @batches = glob("$_/batches/*");
-            foreach my $b (@batches) {
-                tcount("$b/batch.kv", 1);
-                my @jobs = glob("$_/jobs/*");
-                foreach my $j (@jobs) {
-                    tcount("$j/job.kv", 1);
-                }
-            }
-        }
-    }
-    tdir('bin')  && texec('bin/prep');
-    tdir('conf') && tfile('conf/prep.kv');
-}
-
-sub cmd_walk {
-    #@ walk [PROJECT [UPDATE [BATCH [JOB]]]] :: show details on (part of) a project in tree form
-    projwalk {
-        my ($p, $u, $b, $j) = @_;
-        if ($j) {
-            push @{ $b->{'jobs'} ||= [] }, $j;
-        }
-        elsif ($b) {
-            push @{ $u->{'batches'} ||= [] }, $b;
-        }
-        elsif ($u) {
-            push @{ $p->{'updates'} ||= [] }, $u;
-        }
-    };
-    foreach my $p ($project) {
-        printf "P %s %s %d\n", $status2abbrev{$p->{'status'} || UNKNOWN}, pcode($p), $p->{'count'};
-        foreach my $u (@{ $p->{'updates'} }) {
-            printf "U %s %s %s %d\n", $status2abbrev{$u->{'status'}}, $p->{'code'}, ucode($u), $u->{'count'};
-            foreach my $b (@{ $u->{'batches'} }) {
-                printf "B %s %s %s %s %d\n", $status2abbrev{$b->{'status'}}, $p->{'code'}, $u->{'code'}, bcode($b), $b->{'count'};
-                foreach my $j (@{ $b->{'jobs'} }) {
-                    printf "J %s %s %s %s %s %d\n", $status2abbrev{$j->{'status'}}, $p->{'code'}, $u->{'code'}, $b->{'code'}, jcode($j), $j->{'count'} || $b->{'count'};
-                }
-            }
-        }
-    }
-}
-
 sub cmd_log {
     #@ log :: show details from the project log
     my @log = rdlog();
