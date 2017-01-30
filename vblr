@@ -787,7 +787,7 @@ sub cmd_receive {
 Request:
   token   %s
   descrip %s
-  count   %d
+  count   %s
   file    %s
   notes   %s
 EOS
