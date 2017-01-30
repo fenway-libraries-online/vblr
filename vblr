@@ -781,15 +781,25 @@ sub cmd_receive {
         fatal "Can't receive: wrong project" if defined($rqproj) && length($rqproj) && $rqproj ne $pcur;
         fatal "Can't receive: multiple MARC files" if @mrc > 1;
         fatal "Can't receive: no MARC file" if @mrc == 0;
+        my ($file) = $mrc[0];
+        print STDERR "Checking file...\n";
+        my %marc = marc($file);
         my ($token, $descrip, $count, $notes) = @$request{qw(token descrip count notes)};
         $descrip = $comment if defined $comment;
-        printf <<"EOS", $token, $descrip, $count, $mrc[0], $notes;
+        $_ ||= '[none]' for $descrip, $notes;
+        printf <<'EOS', $token, $descrip, $count, $file, $notes, @marc{qw(count status type encoding error-count)};
 Request:
-  token   %s
-  descrip %s
-  count   %s
-  file    %s
-  notes   %s
+  token     %s
+  descrip   %s
+  count     %s
+  file      %s
+  notes     %s
+File:         
+  count     %d
+  status    %s
+  type      %s
+  encoding  %s
+  errors    %d
 EOS
         while (!defined $u) {
             $u = strftime("%Y-%m", localtime);
@@ -805,7 +815,7 @@ EOS
         my %opt = (
             'purpose' => $purpose,
             'description' => $descrip,
-            'file' => $mrc[0],
+            'file' => $file,
             'update' => $u,
         );
         if ($purpose eq DELETE) {
