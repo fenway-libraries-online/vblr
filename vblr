@@ -676,12 +676,13 @@ sub cmd_id {
 }
 
 sub cmd_status {
-    #@ status [-v] [UPDATE [BATCH]]... :: Show project status
-    my ($long, $verbose, $all);
+    #@ status [-lvat] [UPDATE [BATCH]]... :: Show project status
+    my ($long, $verbose, $all, $tail);
     GetOptions(
         'l|long' => \$long,
         'v|verbose' => \$verbose,
         'a|all' => \$all,
+        't|tail' => \$tail,
     ) or usage;
     usage if @ARGV > 2;
     my ($u, $b) = resolve_update_and_batch(@ARGV);
@@ -691,8 +692,12 @@ sub cmd_status {
     }
     my $pstat = rdstatus('.');
     my $sym = $long ? $status2abbrev{$pstat} : $status2chkbox{$pstat};
-    printf "%s %s\n", $sym, $pcur;
     my @u = defined $u ? ($u) : updates();
+    if (@u > 10 && $tail) {
+        print STDERR "Showing last 10 updates only\n" if $verbose;
+        @u = @u[-10..-1];
+    }
+    printf "%s %s\n", $sym, $pcur;
     foreach $u (@u) {
         my $ustat = rdstatus("updates/$u");
         $sym = $long ? $status2abbrev{$ustat} : $status2chkbox{$ustat};
