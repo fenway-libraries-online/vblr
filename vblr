@@ -1698,20 +1698,26 @@ sub cmd_version {
 
 sub cmd_check {
     #@ check :: Look for problems in a file or file kit
-    my $err = 0;
+    my $err;
     foreach my $file (@ARGV) {
+        my @err;
         if ($file =~ /\.kit$/) {
-            $err++ if !check_kit($file);
+            print STDERR "Checking file kit: $file...\n";
+            push @err, check_kit($file);
         }
         elsif ($file =~ /\.mrc$/) {
-            $err++ if !check_marc_file($file);
+            print STDERR "Checking MARC file: $file...\n";
+            push @err, check_marc_file($file);
         }
         else {
-            print STDERR "unrecognized file: $file\n";
-            $err++;
+            print STDERR "Checking file: $file...\n";
+            push @err, "unrecognized file type";
         }
+        print STDERR "  !! $_\n" for @err;
+        $err += scalar @err;
+        print STDERR "  => no problems found\n" if !@err;
     }
-    exit $err;
+    fatal "File check failed" if $err;
 }
 
 sub cmd_log {
@@ -4326,45 +4332,39 @@ sub check_kit {
     my $kit = File::Kit->new($k)
         or fatal "Can't open kit $k";
     my $dir = $kit->path . '/files';
-    my $bad;
+    my @err;
     foreach my $file ($kit->files) {
         my $name = $file->{'name'};
         my $path = "$dir/$name";
         if (!-f $path) {
-            print STDERR "Missing file in kit $k: $path\n";
-            $bad = 1;
+            push @err, "missing file: $path";
         }
         elsif ($name !~ /\.mrc$/) {
-            print STDERR "Non-MARC file in kit $k: $path\n";
-            $bad = 1;
+            push @err, "non-MARC file: $path";
         }
         else {
-            $bad = !check_file($path);
+            push @err, check_marc_file($path);
         }
     }
-    return !$bad;
+    return @err;
 }
 
 sub check_marc_file {
     my ($f) = @_;
     print STDERR "Checking file $f...\n";
     my $n = count($f);
-    my $bad;
+    my (@err, $bad, @out);
     if ($project && $n > ($project->{'guard'} ||= 1_000_000)) {
-        print STDERR "Record count $n exceeds guard threshold $project->{'guard'}\n";
-        $bad = 1;
+        push @err, "record count $n exceeds guard threshold $project->{'guard'}";
     }
     open my $fh, '-|', qw(marcdiag -peOso), $f or fatal "exec marcdiag: $!";
-    my @out;
     while (<$fh>) {
-        chomp, push(@out, $_), next if s/^SUMM //;
-        $bad = 1 if /^FAIL/;
+        chomp;
+        push(@out, $_), next if s/^SUMM //;
+        $bad = 1, push(@err, $_) if s/^FAIL // && !/Error counts/;
     }
-    if ($bad) {
-        print STDERR "This file has errors that must be corrected by the project's record prep script:\n";
-        print $_, "\n" for grep { !/Error counts/ } @out;
-    }
-    return !$bad;
+    push @err, @out if $bad;
+    return @err;
 }
 
 # vim:set nu:
