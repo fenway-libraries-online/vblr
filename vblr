@@ -3595,6 +3595,10 @@ sub add {
     idval($f => $fkey);
     idval($fkey => $f);
     my %update;
+    if (!defined $proto && defined $purpose && $purpose eq DELETE) {
+        my @prodir = dir("prototypes/deletes", "updates/deletes", "$root/prototypes/deletes");
+        $proto = 'deletes' if @prodir;
+    }
     if (defined $proto) {
         my ($prodir) = grep { -e "$_/update.kv" } ( $proto =~ m{/} ? ($proto) : ("prototypes/$proto", "updates/$proto", "$root/prototypes/$proto") );
         fatal "Can't resolve prototype $proto: not found" if !defined $prodir;
