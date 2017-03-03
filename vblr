@@ -2163,6 +2163,20 @@ sub divide_update {
                 push @b, "$1-$count";
                 $rs = $count + 1;
             }
+            elsif ($b =~ s{/(\d+)$}} && !@ranges) {
+                # 1/1000 => batches of 1,000 each: 1-1000, 1001-2000, ...
+                my $size = $1;
+                usage if $b !~ /^\d+$/;
+                usage if $b != $rs && !$opt->{'force'};
+                while ($rs + $size <= $re) {
+                    my $e = $rs + $size - 1;
+                    push @b, "$rs-$e";
+                    $rs += $size;
+                }
+            }
+            else {
+                usage;
+            }
         } while @ranges;
         push @b, "$rs-$re" if $rs != $count + 1;
     }
@@ -3596,7 +3610,7 @@ sub add {
     idval($fkey => $f);
     my %update;
     if (!defined $proto && defined $purpose && $purpose eq DELETE) {
-        my @prodir = dir("prototypes/deletes", "updates/deletes", "$root/prototypes/deletes");
+        my @prodir = dirs("prototypes/deletes", "updates/deletes", "$root/prototypes/deletes");
         $proto = 'deletes' if @prodir;
     }
     if (defined $proto) {
