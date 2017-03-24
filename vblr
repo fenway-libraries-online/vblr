@@ -1245,12 +1245,14 @@ sub cmd_load {
     $verbose = 1 if -t STDIN;
     my $autogen_loaded = 1;
     my $gen_html = 1;
+    my $keyword_index = 1;
     GetOptions(
         'x|delete' => \$delete,
         'v|verbose' => \$verbose,
         'n|dry-run' => \$dry_run,
         'G|no-auto-generate' => sub { undef $autogen_loaded },
         'H|no-html' => sub { undef $gen_html },
+        'K|no-keyword-index' => sub { undef $keyword_index },
     ) or usage;
     $verbose = 1 if $dry_run;
     usage if @ARGV > 2;
@@ -1262,6 +1264,7 @@ sub cmd_load {
         'dry_run'        => $dry_run,
         'autogen_loaded' => $autogen_loaded,
         'gen_html'       => $gen_html,
+        'keyword_index'  => $keyword_index,
     );
     load_batch($u, $b, %opt);
 }
@@ -2304,6 +2307,7 @@ sub load_batch {
         = @opt{qw(delete verbose dry_run autogen_loaded gen_html)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
+    my $n = $e - $s + 1;
     if ($opt{'verbose'}) {
         print STDERR "Dry run...\n" if $opt{'dry_run'};
         print "update:  $u\nbatch:   $b\n";
@@ -2339,6 +2343,10 @@ sub load_batch {
     elsif ($purpose eq DELETE) {
         fatal "You must always specify -x when doing a load that deletes records";
     }
+    my $keyword_limit = $conf->{'keyword-limit'} || 25_000;  # Never update keyword index if batch size > 25,000
+    if ($n > $keyword_limit) {
+        delete $opt{'keyword_index'};
+    }
     my $profile = $conf->{'profile'};
     fatal "No load profile configured" if !defined($profile) && !$update_mfhds;
     my $j = mkjobid();
@@ -2352,6 +2360,7 @@ sub load_batch {
         '-d' => "$jdir/output",
     );
     push @cmd, '-n' if $opt{'dry_run'};
+    push @cmd, '-K' => 'ADDKEY' if $opt{'keyword_index'};
     if (@delete) {
         push @cmd, '-S', '-i' => $profile, '-x', @delete;
     }
@@ -2423,7 +2432,7 @@ sub load_batch {
         'update' => $u,
         'batch' => $b,
         'job' => $j,
-        'count' => $e - $s + 1,
+        'count' => $n,
         'error' => $err,
     );
     if ($result eq ERR) {
@@ -2437,7 +2446,7 @@ sub load_batch {
         open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
         copy($fh, "$jdir/loaded.mrc");
     }
-    if ($opt{'gen_html'} && $e - $s + 1 <= 5000) {
+    if ($opt{'gen_html'} && $n <= 5000) {
         local @ARGV = ('-j' => $j);
         cmd_mkhtml();
     }
