@@ -2360,7 +2360,7 @@ sub load_batch {
         '-d' => "$jdir/output",
     );
     push @cmd, '-n' if $opt{'dry_run'};
-    push @cmd, '-K' => 'ADDKEY' if $opt{'keyword_index'};
+    push @cmd, '-k' if $opt{'keyword_index'};
     if (@delete) {
         push @cmd, '-S', '-i' => $profile, '-x', @delete;
     }
