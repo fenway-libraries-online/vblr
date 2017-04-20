@@ -3000,6 +3000,11 @@ sub orient {
         $gcur = $1;
         $pcur = "$1/$2";
     }
+    elsif (-e 'project.kv') {
+        $project = rdproject();
+        $pcur = $project->{'code'};
+        ($gcur = $pcur) =~ s{/.+}{};
+    }
     else {
         fatal "I don't know what to do when a project is not within $root";
     }
@@ -3016,7 +3021,7 @@ sub orient {
     else {
         undef $bdir;
     }
-    $project = rdproject();
+    $project ||= rdproject();
     if (!$project->{'id'}) {
         my $pid = $project->{'id'} = randhex();
         wrproject($project);
