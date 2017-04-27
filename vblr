@@ -1281,13 +1281,27 @@ sub cmd_mkdrops {
 
 sub cmd_jobs {
     #@ jobs [-B] [UPDATE [BATCH]] :: List load jobs
-    my $brief;
+    my ($brief, $all);
     GetOptions(
         'B|brief' => \$brief,
+        'a|all' => \$all,
     ) or usage;
     my ($u, $b) = resolve_update_and_batch(@ARGV);
+    if ($all) {
+        my %seen;
+        foreach my $l (rdlog()) {
+            my $j = $l->{'job'} or next;
+            next if $seen{$j};
+            print($j, $seen{$j} = "\n"), next if $brief;
+            my $lu = $l->{'update'} or next;
+            my $lb = $l->{'batch'}  or next;
+            next if defined $u && $lu ne $u;
+            next if defined $b && $lb ne $b;
+            print("$lu $lb $j", $seen{$j} = "\n");
+        }
+        return;
+    }
     my $j;
-    #my @dirs;
     if (defined $b) {
         foreach $j (jobs($u, $b)) { print $brief ? "$j\n" : "$u $b $j\n" }
     }
@@ -1298,13 +1312,6 @@ sub cmd_jobs {
         foreach $u (updates()) { foreach $b (batches($u)) { foreach $j (jobs($u, $b)) { print $brief ? "$j\n" : "$u $b $j\n" } } }
     }
     return;
-    #my @dirs = dirs("$dir/*/j?????????");
-    #foreach (@dirs) {
-    #    my @parts = split m{/};
-    #    my $j;
-    #    ($u, $b, $j) = @parts[1,3,5];
-    #    print "$u $b $j\n";
-    #}
 }
 
 sub resolve_update_batch_and_job {
