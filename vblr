@@ -2037,8 +2037,17 @@ sub cmd_latest {
 }
 
 sub cmd_project {
-    #@ project :: print the project code
-    print $project->{'code'}, "\n";
+    #@ project :: print the project code or path
+    my ($path);
+    GetOptions(
+        'p|path' => \$path,
+    ) or usage;
+    if ($path) {
+        print $root, '/', $pcur, "\n";
+    }
+    else {
+        print $pcur, "\n";
+    }
 }
 
 sub cmd_notify {
