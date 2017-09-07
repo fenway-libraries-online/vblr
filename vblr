@@ -2359,6 +2359,7 @@ sub load_batch {
     elsif ($purpose eq DELETE) {
         fatal "You must always specify -x when doing a load that deletes records";
     }
+    $opt{'keyword_index'} = bool($conf->{'keyword-index'}) if !exists $opt{'keyword_index'};
     my $keyword_limit = $conf->{'keyword-limit'} || 25_000;  # Never update keyword index if batch size > 25,000
     if ($n > $keyword_limit) {
         delete $opt{'keyword_index'};
