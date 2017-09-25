@@ -1182,6 +1182,7 @@ sub cmd_prep {
         'f|force' => \$force,
         'e|expected=i' => \$expec,
         'h|html' => \$gen_html,
+        't|trace' => sub { $ENV{'VBLR_TRACE'} = 1 },
     ) or usage;
     $verbose = 1 if $dry_run;
     usage if @ARGV > 2;
