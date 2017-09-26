@@ -22,6 +22,7 @@ use MIME::Base64;
 use YAML;
 use IO::Handle;
 use Text::Glob qw(glob_to_regex);
+use Text::ParseWords qw(shellwords quotewords);
 use DB_File;
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
@@ -167,6 +168,7 @@ sub warning;
 sub quit;
 sub fatal;
 sub throw;
+sub exit;
 sub ask(\$$;$);
 sub askbool($);
 
@@ -178,8 +180,8 @@ my $ucur;  # Name of the current update (if we're within an update dir)
 my $bcur;  # Name of the current batch (if yadda yadda)
 
 my $project;
-
-@ARGV = qw(help) if !@ARGV;
+my $interactive = -t STDIN && -t STDOUT && -t STDERR;
+my %shell;
 
 my $now = strftime(TIMESTAMP, localtime);
 my $expando = String::Expando->new(
@@ -191,7 +193,7 @@ GetOptions(
     'p|project=s' => \$pdir,
 ) or usage_commands;
 
-my %skip_orient = map { $_ => 1 } qw( init help version projects groups www iddb which );
+my %skip_orient = map { $_ => 1 } qw( init help version projects groups www iddb which shell );
 my %iddb;
 
 @ARGV = qw(help) if !@ARGV;
@@ -358,7 +360,7 @@ sub cmd_add {
         autoload($u, \%opt) if $opt{'autoload'};
     }
     if ($opt{'quiet'}) {
-        exit -1 if !@updates;
+        ::exit -1 if !@updates;
     }
     else {
         print $_, "\n" for @updates;
@@ -1364,7 +1366,7 @@ sub cmd_results {
             $action = '*' if !defined $action;
             $tally{$type}{$action} = 1;
         },
-    ) or exit usage;
+    ) or usage;
     my @jobs;
     if ($jobs) {
         # vblr results -j JOBID...
@@ -1437,7 +1439,7 @@ sub cmd_res1 {
     GetOptions(
         'v|verbose' => \$verbose,
         'j|job=s' => \$j,
-    ) or exit usage;
+    ) or usage;
     ($u, $b) = @ARGV;
     ($u, $b, @jobs) = resolve_update_batch_and_job($u, $b, $j);
     my $bdir = "updates/$u/batches/$b";
@@ -1474,9 +1476,9 @@ sub cmd_ls {
         'v|verbose' => \$verbose,
         's|statuses' => sub {
             print $_->[0], "\n" for @statuses;
-            exit 0;
+            ::exit 0;
         },
-    ) or exit usage;
+    ) or usage;
     @ARGV = (@ARGV, '.') if @ARGV == 1 && defined $bcur;
     @ARGV = ('.', '.') if @ARGV == 0 && defined $bcur;
     my ($u, $b) = resolve_update_and_batch(@ARGV);
@@ -1587,7 +1589,7 @@ sub cmd_cat {
         fatal "No files to cat" if !@files;
         $err = system('cat', @files);
     }
-    exit $err;
+    ::exit $err;
 }
 
 sub find_archived_update_marc {
@@ -1687,7 +1689,7 @@ sub pipe_marc {
             printf "%d) %s\n", $i++, basename(dirname($_));
         }
         ask $i, 'Which file? ';
-        exit 0 if !defined $i;
+        ::exit 0 if !defined $i;
     }
     elsif ($wait && -t STDIN) {
         print STDERR "Press <Enter> to view ", $files->[$i-1], ' ... ';
@@ -1887,7 +1889,7 @@ sub cmd_mkhtml {
     if ($dry_run) {
         print STDERR "Dry run: @cmd\n";
         print STDERR "URL:     $url\n";
-        exit 0;
+        ::exit 0;
     }
     print STDERR "URL: $url\n" if $verbose;
     my $predir = "$www_root/$code/preview";
@@ -1938,7 +1940,7 @@ sub cmd_drops {
             usage if $_[1] !~ /^(un[rm]|dis)/i;
             $want{lc $1} = 1;
         },
-    ) or exit usage;
+    ) or usage;
     my @jobs;
     if ($jobs) {
         # vblr drops -j JOBID...
@@ -2035,7 +2037,7 @@ sub cmd_carry {
 sub cmd_latest {
     #@ latest :: print the latest update
     my $latest = latest();
-    exit 2 if !defined $latest;
+    ::exit 2 if !defined $latest;
     print $latest, "\n";
 }
 
@@ -2136,12 +2138,12 @@ sub warning {
 
 sub quit {
     print STDERR $_, "\n" for @_;
-    exit 3;
+    ::exit 3;
 }
 
 sub fatal {
     print STDERR 'FATAL: ', $_, "\n" for @_;
-    exit 2;
+    ::exit 2;
 }
 
 sub throw {
@@ -3458,17 +3460,17 @@ sub usage_commands {
     foreach (@$commands) {
         printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_[0..2];
     }
-    exit 1;
+    ::exit 1;
 }
 
 sub usage {
     my ($commands, $wcmd, $wargs) = commands();
     if (my ($c) = grep { $_->[0] eq $cmd } @$commands) {
         printf STDERR "usage: vblr %s %s\n", @$c[0..1];
-        exit 1;
+        ::exit 1;
     }
     print STDERR "usage: vblr COMMAND [ARG]...\n";
-    exit 1;
+    ::exit 1;
 }
 
 sub cmd_help {
@@ -4096,6 +4098,106 @@ sub cmd_which {
     print join(' ', @load{qw(project update batch job)}), "\n";
 }
 
+sub cmd_shell {
+    fatal "can't run vblr shell non-interactively" if !$interactive;
+    {
+        no strict 'refs';
+        no warnings 'redefine';
+        foreach my $cmd (keys %skip_orient) {
+            next if $cmd eq 'shell';
+            my $sub = __PACKAGE__->can("cmd_$cmd");
+            *{"shellcmd_$cmd"} = sub {
+                my $cwd = getcwd;
+                $sub->();
+                chdir $cwd;
+            } if !__PACKAGE__->can("shellcmd_$cmd");
+        }
+        *cmd_shell = sub {
+            print STDERR "No subshells allowed\n";
+        };
+        *exit = sub {
+            # CORE::exit 2 if askbool 'Quit?';
+        };
+    }
+    my %unesc = (
+        '\e' => "\e",
+        '\n' => "\n",
+        '\r' => "\r",
+        '\t' => "\t",
+        '\\' => "\\",
+    );
+    compile_prompt();
+    print STDERR $shell{'prompter'}->();
+    while (<STDIN>) {
+        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+        chomp;
+        s/(\\[\\entr])/$unesc{$1}/g;
+        @ARGV = shellwords($_);
+        my $cmd = shift @ARGV;
+        $cmd =~ tr/-/_/;
+        my $sub = __PACKAGE__->can("shellcmd_$cmd") || __PACKAGE__->can("cmd_$cmd") || usage_commands;
+        eval {
+            $sub->();
+        };
+    }
+    continue {
+        print STDERR $shell{'prompter'}->();
+    }
+}
+
+# --- Shell(-only) commands
+
+sub shellcmd_q { goto &shellcmd_quit }
+sub shellcmd_quit {
+    CORE::exit 0;
+}
+
+sub shellcmd_prompt {
+    if (@ARGV) {
+        compile_prompt("@ARGV");
+    }
+    else {
+        my %esc = reverse(
+            '\e' => "\e",
+            '\n' => "\n",
+            '\r' => "\r",
+            '\t' => "\t",
+            '\\' => "\\",
+        );
+        my @prompt = grep { defined $_ } quotewords('\s+', 1, qq{$shell{'prompt'}});
+        s/(.)/$esc{$1} || $1/eg for @prompt;
+        print qq{prompt is set to:\n"@prompt"\n};
+    }
+}
+
+sub shellcmd_p { goto &shellcmd_project }
+sub shellcmd_project {
+    if (@ARGV) {
+        my ($p) = @ARGV;
+        usage if @ARGV > 1;
+        if (
+            -e "$root/$p/project.kv"
+            ||
+            ($p =~ m{^/} && -e "$p/project.kv"))
+        {
+            $pdir = $p;
+            orient();
+            print "switched to project $p\n";
+        }
+        else {
+            print "no such project: $p\n";
+        }
+    }
+    elsif (defined $pcur) {
+        print $pcur, "\n";
+    }
+    else {
+        print "not in a project\n";
+    }
+}
+
+# --- Other functions
+
 sub mkjob {
     my ($u, $b, $j) = @_;
     idval($j => join('/', $project->{'id'}, $u, $b));
@@ -4463,6 +4565,29 @@ sub kvfile {
     else {
         return 'project.kv';
     }
+}
+
+sub compile_prompt {
+    my ($prompt) = @_;
+    if (defined $prompt) {
+        $prompt =~ s/\\(.)/eval "$1"/eg;
+    }
+    else {
+        $prompt = "\e[32;1m%(project)\e[0;1m>\e[0m ";
+    }
+    $shell{'prompt'} = $prompt;
+    my $prompt_expando = String::Expando->new;
+    return $shell{'prompter'} = sub {
+        $prompt_expando->expand($prompt, {
+            'project' => $pcur,
+            'update'  => $ucur,
+            'batch'   => $bcur,
+        });
+    }
+}
+
+sub exit {
+    CORE::exit(@_);
 }
 
 # vim:set nu:
