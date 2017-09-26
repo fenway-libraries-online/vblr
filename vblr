@@ -457,7 +457,7 @@ sub cmd_note {
 }
 
 sub cmd_notes {
-    #@ notes :: Show notes for a batch, update, or project
+    #@ notes [ -j JOB | [UPDATE [BATCH]] ] :: Show notes for a batch, update, or project
     my ($u, $b, $j);
     GetOptions(
         'j|job=s' => \$j,
