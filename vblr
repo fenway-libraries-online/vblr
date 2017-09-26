@@ -2042,7 +2042,7 @@ sub cmd_latest {
 }
 
 sub cmd_project {
-    #@ project :: print the project code or path
+    #@noshell project :: print the project code or path
     my ($path);
     GetOptions(
         'p|path' => \$path,
@@ -3455,7 +3455,7 @@ sub marc {
 
 sub usage_commands {
     my ($commands, $wcmd, $wargs) = commands();
-    print STDERR "usage: vblr COMMAND [ARG]...\n";
+    print STDERR "usage: vblr COMMAND [ARG]...\n" if !%shell;
     print STDERR "commands:\n";
     foreach (@$commands) {
         printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_[0..2];
@@ -3497,7 +3497,9 @@ sub commands {
     my ($lcmd, $largs);
     my @commands;
     while (<$fh>) {
-        if (s/^\s*#@ (\S+)(?:\s+(.+))?\s+::\s+(.+)//) {
+        next if /^\s*#\@shell / && !%shell;
+        next if /^\s*#\@noshell / && %shell;
+        if (s/^\s*#@\w* (\S+)(?:\s+(.+))?\s+::\s+(.+)//) {
             next if %want && !$want{$1};
             my ($cmd, $args, $desc) = ($1, $2 || '', $3);
             chomp;
@@ -4100,6 +4102,7 @@ sub cmd_which {
 
 sub cmd_shell {
     fatal "can't run vblr shell non-interactively" if !$interactive;
+    $shell{'running'} = 1;
     {
         no strict 'refs';
         no warnings 'redefine';
@@ -4112,13 +4115,12 @@ sub cmd_shell {
                 chdir $cwd;
             } if !__PACKAGE__->can("shellcmd_$cmd");
         }
-        *cmd_shell = sub {
-            print STDERR "No subshells allowed\n";
-        };
+        *usage = \&shellcmd_usage,
         *exit = sub {
             # CORE::exit 2 if askbool 'Quit?';
         };
     }
+    orient() if -e 'project.kv';
     my %unesc = (
         '\e' => "\e",
         '\n' => "\n",
@@ -4135,10 +4137,22 @@ sub cmd_shell {
         @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
         $cmd =~ tr/-/_/;
-        my $sub = __PACKAGE__->can("shellcmd_$cmd") || __PACKAGE__->can("cmd_$cmd") || usage_commands;
+        my $sub = __PACKAGE__->can("shellcmd_$cmd");
+        if (!$sub) {
+            $sub = __PACKAGE__->can("cmd_$cmd");
+            if ($sub && !defined $pcur && !$skip_orient{$cmd}) {
+                print "you can't run that command outside of a project\n";
+                next;
+            }
+        }
+        if (!$sub) {
+            print "unrecognized command: $cmd\nenter 'help' for a list\n";
+            next;
+        }
         eval {
             $sub->();
         };
+        last if !$shell{'running'};
     }
     continue {
         print STDERR $shell{'prompter'}->();
@@ -4147,12 +4161,33 @@ sub cmd_shell {
 
 # --- Shell(-only) commands
 
-sub shellcmd_q { goto &shellcmd_quit }
-sub shellcmd_quit {
-    CORE::exit 0;
+sub shellcmd_usage {
+    if (@ARGV) {
+        print "usage for @ARGV!\n";
+    }
+    else {
+        print "usage!\n";
+    }
 }
 
+sub shellcmd_commands {
+    usage_commands;
+}
+
+sub shellcmd_q { goto &shellcmd_quit }
+sub shellcmd_quit {
+    #@shell quit :: exit the vblr shell
+    $shell{'running'} = 0;
+}
+
+sub shellcmd_shell {
+    print STDERR "entering shell; use 'exit' or Ctrl-D to return to vblr\n";
+    system($ENV{'SHELL'} || 'zsh');
+    print STDERR "returning to vblr\n";
+};
+
 sub shellcmd_prompt {
+    #@shell prompt [STRING] :: print or set the prompt
     if (@ARGV) {
         compile_prompt("@ARGV");
     }
@@ -4172,6 +4207,7 @@ sub shellcmd_prompt {
 
 sub shellcmd_p { goto &shellcmd_project }
 sub shellcmd_project {
+    #@shell project [PROJ] :: print or set the current project
     if (@ARGV) {
         my ($p) = @ARGV;
         usage if @ARGV > 1;
@@ -4189,7 +4225,7 @@ sub shellcmd_project {
         }
     }
     elsif (defined $pcur) {
-        print $pcur, "\n";
+        print "in project $pcur\n";
     }
     else {
         print "not in a project\n";
