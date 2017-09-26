@@ -4109,12 +4109,24 @@ sub cmd_which {
 sub cmd_shell {
     fatal "can't run vblr shell non-interactively" if !$interactive;
     print STDERR "Welcome to the vblr shell.  Enter 'help' for a list of commands.\n";
-    $shell{'running'} = 1;
     my %alias = qw(
         h   help
         q   quit
         p   project
     );
+    my $rcfile = glob('~/.vblr/shell.conf');
+    if ($rcfile) {
+        %shell = %{
+            rdconfigfile(
+                $rcfile,
+                'alias' => sub {
+                    m/^(\S+)\s+(.+)$/ or fatal "invalid alias in $rcfile: $_";
+                    $alias{$1} = $2;
+                },
+            );
+        }
+    }
+    $shell{'running'} = 1;
     $shell{'aliases'} = \%alias;
     {
         no strict 'refs';
@@ -4133,19 +4145,11 @@ sub cmd_shell {
         };
     }
     orient() if -e 'project.kv';
-    my %unesc = (
-        '\e' => "\e",
-        '\n' => "\n",
-        '\r' => "\r",
-        '\t' => "\t",
-        '\\' => "\\",
-    );
-    compile_prompt();
+    compile_prompt($shell{'prompt'});
     print STDERR $shell{'prompter'}->();
     while (<STDIN>) {
         next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
         chomp;
-        s/(\\[\\entr])/$unesc{$1}/g;
         @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
         $cmd =~ tr/-/_/;
@@ -4608,8 +4612,15 @@ sub kvfile {
 
 sub compile_prompt {
     my ($prompt) = @_;
+    my %unesc = (
+        '\e' => "\e",
+        '\n' => "\n",
+        '\r' => "\r",
+        '\t' => "\t",
+        '\\' => "\\",
+    );
     if (defined $prompt) {
-        $prompt =~ s/\\(.)/eval "$1"/eg;
+        $prompt =~ s/(\\[\\entr])/$unesc{$1}/g;
     }
     else {
         $prompt = "\e[32;1m%(project)\e[0;1m>\e[0m ";
@@ -4627,6 +4638,27 @@ sub compile_prompt {
 
 sub exit {
     CORE::exit(@_);
+}
+
+sub rdconfigfile {
+    my ($f, %action) = @_;
+    open my $fh, '<', $f or fatal "open $f: $!";
+    my %conf;
+    local $_;
+    while (<$fh>) {
+        s/^\s+|\s+$//g;
+        next if /^(?:#.*)?$/;  # Skip blank lines and comments
+        chomp;
+        /^(\S+)(?:\s*(.+))?$/
+            or fatal "invalid config at line $. of $f: $_";
+        if ($action{$1}) {
+            $action{$1}->() for $2;
+        }
+        else {
+            $conf{$1} = join(' ', shellwords($2));
+        };
+    }
+    return \%conf;
 }
 
 # vim:set nu:
