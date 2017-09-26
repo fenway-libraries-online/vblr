@@ -456,6 +456,20 @@ sub cmd_note {
     wrkvfile($file, $kv);
 }
 
+sub cmd_notes {
+    #@ notes :: Show notes for a batch, update, or project
+    my ($u, $b, $j);
+    GetOptions(
+        'j|job=s' => \$j,
+    ) or usage;
+    ($u, $b) = @ARGV;
+    my $file = kvfile($u, $b, $j);
+    my $kv = rdkvfile($file);
+    return if !exists $kv->{'notes'};
+    my @notes = split / *\\; */, $kv->{'notes'};
+    print $_, "\n" for @notes;
+}
+
 sub cmd_conf {
     #@ conf :: Show configuration settings
     my ($verbose, $no_warnings);
