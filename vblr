@@ -194,6 +194,7 @@ GetOptions(
 my %skip_orient = map { $_ => 1 } qw( init help version projects groups www iddb which );
 my %iddb;
 
+@ARGV = qw(help) if !@ARGV;
 my $cmd = shift @ARGV;
 $cmd =~ tr/-/_/;
 my $sub = __PACKAGE__->can("cmd_$cmd") || usage_commands;
@@ -3454,7 +3455,7 @@ sub usage_commands {
     print STDERR "usage: vblr COMMAND [ARG]...\n";
     print STDERR "commands:\n";
     foreach (@$commands) {
-        printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_;
+        printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_[0..2];
     }
     exit 1;
 }
