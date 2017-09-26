@@ -3460,7 +3460,9 @@ EOS
         print STDERR "aliases:\n";
         my $aliases = $shell{'aliases'};
         foreach (sort keys %$aliases) {
-            printf STDERR "  %-4.4s = %s\n", $_, $aliases->{$_};
+            my $a = $aliases->{$_};
+            $a = join(' ', @$a) if ref $a;
+            printf STDERR "  %-4.4s = %s\n", $_, $a;
         }
     }
     ::exit 1;
@@ -4121,7 +4123,7 @@ sub cmd_shell {
                 $rcfile,
                 'alias' => sub {
                     m/^(\S+)\s+(.+)$/ or fatal "invalid alias in $rcfile: $_";
-                    $alias{$1} = $2;
+                    $alias{$1} = [ shellwords($2) ];
                 },
             );
         }
@@ -4153,7 +4155,12 @@ sub cmd_shell {
         @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
         $cmd =~ tr/-/_/;
-        $cmd = $alias{$cmd} if $alias{$cmd};
+        if ($alias{$cmd}) {
+            $cmd = $alias{$cmd};
+            if (ref $cmd) {
+                ($cmd, @ARGV) = (@$cmd, @ARGV);
+            }
+        }
         my $sub = __PACKAGE__->can("shellcmd_$cmd");
         if (!$sub) {
             $sub = __PACKAGE__->can("cmd_$cmd");
