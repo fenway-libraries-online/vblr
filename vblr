@@ -584,7 +584,7 @@ sub cmd_count {
 }
 
 sub cmd_export {
-    #@ export [-y] [-a] :: Export data on a project
+    #@ export [-Y] [-a] :: Export data on a project
     my ($all, $exporter);
     GetOptions(
         'a|all-updates' => \$all,
@@ -609,7 +609,7 @@ sub cmd_export {
     else {
         @u = updates();
         %u2status = map { $_ => rdstatus("updates/$_") } @u;
-        @u = grep { $u2status{$_} ne FINISHED } @u;
+        @u = grep { $u2status{$_} ne FINISHED && $u2status{$_} ne ARCHIVED } @u;
     }
     %u2status = map { $_ => rdstatus("updates/$_") } @u
         if !%u2status;
