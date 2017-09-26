@@ -4214,9 +4214,9 @@ sub shellcmd_prompt {
             '\t' => "\t",
             '\\' => "\\",
         );
-        my @prompt = grep { defined $_ } quotewords('\s+', 1, qq{$shell{'prompt'}});
+        my @prompt = grep { defined $_ } quotewords('\s+(?=\S)', 1, qq{$shell{'prompt'}});
         s/(.)/$esc{$1} || $1/eg for @prompt;
-        print qq{prompt is set to:\n"@prompt"\n};
+        print qq{prompt is set to '@prompt'\n};
     }
 }
 
