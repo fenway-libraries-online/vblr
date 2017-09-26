@@ -167,7 +167,6 @@ sub usage_commands;
 sub warning;
 sub quit;
 sub fatal;
-sub throw;
 sub exit;
 sub ask(\$$;$);
 sub askbool($);
@@ -1526,7 +1525,7 @@ sub cmd_match {
     fatal "Load config file not found" if !$cfile || !-e $cfile;
     my $conf = rdkvfile($cfile);
     $profile ||= $conf->{'profile'} || fatal "No load profile configured";
-    my $rectype = $update->{'marc-type'} || die;
+    my $rectype = $update->{'marc-type'} || fatal "No MARC record type for update $u";
     $rectype = BIBMFHD if $conf->{'interleaved'};
     my @delete  = $update->{'delete'} ? qw(-x) : qw();
     open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
@@ -1832,7 +1831,7 @@ sub cmd_mkhtml {
             $inmarc = "$inmarcdir/loaded.mrc";
             if (!-e $inmarc) {
                 fatal "No loaded.mrc file in $inmarcdir" if !$autogen;
-                open my $fh, '-|', 'vjobget', $j or die "Can't run vjobget: $!";
+                open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
                 copy($fh, $inmarc);
             }
         }
@@ -1913,7 +1912,7 @@ sub cmd_mkhtml {
             print STDERR $_, "\n";
         }
     }
-    open my $fh, '-|', @cmd or die "Can't run marc2html: $!";
+    open my $fh, '-|', @cmd or fatal "Can't run marc2html: $!";
     $copy->($fh,     $outhtml) or $err->($outhtml);
     $copy->($inmarc, $outmarc) or $err->($outmarc);
 }
@@ -2144,12 +2143,6 @@ sub quit {
 sub fatal {
     print STDERR 'FATAL: ', $_, "\n" for @_;
     ::exit 2;
-}
-
-sub throw {
-    my ($exc, $msg) = @_;
-    $! = $msg;
-    die($exc."\n");
 }
 
 sub divide_update {
@@ -3476,7 +3469,8 @@ EOS
 sub usage {
     my ($commands, $wcmd, $wargs) = commands();
     my $pfx = %shell ? "usage:" : "usage: vblr";
-    if (my ($c) = grep { $_->[0] eq $cmd } @$commands) {
+    my $cur_cmd = %shell ? $shell{'cmd'} : $cmd;
+    if (my ($c) = grep { $_->[0] eq $cur_cmd } @$commands) {
         printf STDERR "%s %s %s\n", $pfx, @$c[0..1];
         ::exit 1;
     }
@@ -4134,9 +4128,8 @@ sub cmd_shell {
                 chdir $cwd;
             } if !__PACKAGE__->can("shellcmd_$cmd");
         }
-        *usage = \&shellcmd_usage,
         *exit = sub {
-            # CORE::exit 2 if askbool 'Quit?';
+            die;  # Abort current command
         };
     }
     orient() if -e 'project.kv';
@@ -4181,16 +4174,6 @@ sub cmd_shell {
 }
 
 # --- Shell(-only) commands
-
-sub shellcmd_usage {
-    my $cmd = $shell{'cmd'};
-    my ($commands, $wcmd, $wargs) = commands();
-    if (my ($c) = grep { $_->[0] eq $cmd } @$commands) {
-        printf STDERR "usage: %s %s\n", @$c[0..1];
-    }
-    print STDERR "usage: COMMAND [ARG]...\n";
-    die;
-}
 
 sub shellcmd_commands {
     usage_commands;
