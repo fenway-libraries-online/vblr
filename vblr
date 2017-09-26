@@ -4170,6 +4170,7 @@ sub cmd_shell {
             next;
         }
         eval {
+            $shell{'cmd'} = $cmd;
             $sub->();
         };
         last if !$shell{'running'};
@@ -4182,12 +4183,13 @@ sub cmd_shell {
 # --- Shell(-only) commands
 
 sub shellcmd_usage {
-    if (@ARGV) {
-        print "usage for @ARGV!\n";
+    my $cmd = $shell{'cmd'};
+    my ($commands, $wcmd, $wargs) = commands();
+    if (my ($c) = grep { $_->[0] eq $cmd } @$commands) {
+        printf STDERR "usage: %s %s\n", @$c[0..1];
     }
-    else {
-        print "usage!\n";
-    }
+    print STDERR "usage: COMMAND [ARG]...\n";
+    die;
 }
 
 sub shellcmd_commands {
