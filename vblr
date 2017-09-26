@@ -196,7 +196,7 @@ GetOptions(
 my %skip_orient = map { $_ => 1 } qw( init help version projects groups www iddb which shell );
 my %iddb;
 
-@ARGV = qw(help) if !@ARGV;
+@ARGV = qw(shell) if !@ARGV;
 my $cmd = shift @ARGV;
 $cmd =~ tr/-/_/;
 my $sub = __PACKAGE__->can("cmd_$cmd") || usage_commands;
@@ -3456,9 +3456,19 @@ sub marc {
 sub usage_commands {
     my ($commands, $wcmd, $wargs) = commands();
     print STDERR "usage: vblr COMMAND [ARG]...\n" if !%shell;
-    print STDERR "commands:\n";
+    print STDERR <<'EOS';
+commands: (*only in vblr shell)
+EOS
     foreach (@$commands) {
-        printf STDERR "  %-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", @$_[0..2];
+        my $mark = $_->[3] eq 'shell' ? '*' : ' ';
+        printf STDERR " %s%-${wcmd}.${wcmd}s %-${wargs}.${wargs}s  %s\n", $mark, @$_[0..2];
+    }
+    if (%shell) {
+        print STDERR "aliases:\n";
+        my $aliases = $shell{'aliases'};
+        foreach (sort keys %$aliases) {
+            printf STDERR "  %-4.4s = %s\n", $_, $aliases->{$_};
+        }
     }
     ::exit 1;
 }
@@ -3501,14 +3511,14 @@ sub commands {
     while (<$fh>) {
         next if /^\s*#\@shell / && !%shell;
         next if /^\s*#\@noshell / && %shell;
-        if (s/^\s*#@\w* (\S+)(?:\s+(.+))?\s+::\s+(.+)//) {
-            next if %want && !$want{$1};
-            my ($cmd, $args, $desc) = ($1, $2 || '', $3);
+        if (s/^\s*#@(\w*) (\S+)(?:\s+(.+))?\s+::\s+(.+)//) {
+            my ($flag, $cmd, $args, $desc) = ($1, $2, $3 || '', $4);
+            next if %want && !$want{$cmd};
             chomp;
             ($lcmd, $largs) = (length $cmd, length $args);
             $wcmd = $lcmd if $lcmd > $wcmd;
             $wargs = $largs if $largs > $wargs;
-            my @cmd = ($cmd, $args, ucfirst $desc);;
+            my @cmd = ($cmd, $args, ucfirst $desc, $flag);
             push @commands, \@cmd;
             while (<$fh>) {
                 last if !s/^\s*#@ //;
@@ -4104,7 +4114,14 @@ sub cmd_which {
 
 sub cmd_shell {
     fatal "can't run vblr shell non-interactively" if !$interactive;
+    print STDERR "Welcome to the vblr shell.  Enter 'help' for a list of commands.\n";
     $shell{'running'} = 1;
+    my %alias = qw(
+        h   help
+        q   quit
+        p   project
+    );
+    $shell{'aliases'} = \%alias;
     {
         no strict 'refs';
         no warnings 'redefine';
@@ -4139,6 +4156,7 @@ sub cmd_shell {
         @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
         $cmd =~ tr/-/_/;
+        $cmd = $alias{$cmd} if $alias{$cmd};
         my $sub = __PACKAGE__->can("shellcmd_$cmd");
         if (!$sub) {
             $sub = __PACKAGE__->can("cmd_$cmd");
@@ -4176,7 +4194,6 @@ sub shellcmd_commands {
     usage_commands;
 }
 
-sub shellcmd_q { goto &shellcmd_quit }
 sub shellcmd_quit {
     #@shell quit :: exit the vblr shell
     $shell{'running'} = 0;
@@ -4207,7 +4224,6 @@ sub shellcmd_prompt {
     }
 }
 
-sub shellcmd_p { goto &shellcmd_project }
 sub shellcmd_project {
     #@shell project [PROJ] :: print or set the current project
     if (@ARGV) {
