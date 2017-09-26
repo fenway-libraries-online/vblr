@@ -448,20 +448,7 @@ sub cmd_note {
         'j|job=s' => \$j,
     ) or usage;
     ($u, $b) = @ARGV;
-    my $file;
-    if (defined $j) {
-        ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
-        $file = "updates/$u/batches/$b/jobs/$j/job.kv";
-    }
-    elsif (defined $b) {
-        $file = "updates/$u/batches/$b/batch.kv";
-    }
-    elsif (defined $u) {
-        $file = "updates/$u/update.kv";
-    }
-    else {
-        $file = 'project.kv';
-    }
+    my $file = kvfile($u, $b, $j);
     my $kv = rdkvfile($file);
     my $notes = $kv->{'notes'};
     my @notes = grep { defined } ($notes, $note);
@@ -4445,6 +4432,23 @@ sub check_marc_file {
     }
     push @err, @out if $bad;
     return @err;
+}
+
+sub kvfile {
+    my ($u, $b, $j) = @_;
+    if (defined $j) {
+        ($u, $b, $j) = resolve_update_batch_and_job($u, $b, $j);
+        return "updates/$u/batches/$b/jobs/$j/job.kv";
+    }
+    elsif (defined $b) {
+        return "updates/$u/batches/$b/batch.kv";
+    }
+    elsif (defined $u) {
+        return "updates/$u/update.kv";
+    }
+    else {
+        return 'project.kv';
+    }
 }
 
 # vim:set nu:
