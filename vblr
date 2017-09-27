@@ -3131,6 +3131,13 @@ sub wrkvfile {
     $kvfile->write($kv);
 }
 
+sub rdfile {
+    my ($f) = @_;
+    open my $fh, '<', $f or die "open $f: $!";
+    local $/ if !wantarray;
+    return <$fh>;
+}
+
 sub files {
     my @files = grep { -e } map { glob($_) } @_;
     return @files if wantarray;
@@ -4002,7 +4009,8 @@ sub find {
     return $f if $f =~ m{^/} && -e $f;
     my @files = files(map { "$_/$f" } @_);
     return if !@files;
-    shift @files;
+    return @files if wantarray;
+    return shift @files;
 }
 
 sub cmd_iddb {
@@ -4181,6 +4189,38 @@ sub cmd_shell {
     }
     continue {
         print STDERR $shell{'prompter'}->();
+    }
+}
+
+sub cmd_edit {
+    my $editor = $ENV{'VISUAL'} || $ENV{'EDITOR'} || 'vim';
+    my @opt;
+    while (@ARGV && $ARGV[0] =~ /^[-+]/) {
+        push @opt, shift @ARGV;
+    }
+    @ARGV = qw(prep) if !@ARGV;
+    @ARGV = map {
+        my @files;
+        if ($_ eq 'prep') {
+            @files = find('bin/prep', '.');
+        }
+        elsif ($_ eq 'conf') {
+            @files = find('conf/*.kv', '.');
+        }
+        elsif ($_ eq 'proj') {
+            @files = find('project.kv', '.');
+        }
+        else {
+            @files = ($_);
+        }
+        @files;
+    } @ARGV;
+    push @opt, '-o' if @ARGV > 1 && $editor =~ '\bvi';
+    my %sum = map { $_ => sha1_hex(rdfile($_)) } @ARGV;
+    system($editor, @opt, @ARGV);
+    foreach (@ARGV) {
+        next if sha1_hex(rdfile($_)) ne $sum{$_};
+        print STDERR "no changes: $_\n";
     }
 }
 
