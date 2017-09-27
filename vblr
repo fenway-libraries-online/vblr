@@ -4207,6 +4207,9 @@ sub cmd_edit {
         elsif ($_ eq 'conf') {
             @files = find('conf/*.kv', '.');
         }
+        elsif (m{^conf/\w+}) {
+            @files = find("$_.kv", '.');
+        }
         elsif ($_ eq 'proj') {
             @files = find('project.kv', '.');
         }
