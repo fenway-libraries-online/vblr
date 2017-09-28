@@ -1370,7 +1370,7 @@ sub cmd_results {
     if ($jobs) {
         # vblr results -j JOBID...
         foreach my $j (@ARGV) {
-            $j = (jobs())[-1] if $j eq 'last';
+            $j = (jobs($ucur, $bcur))[-1] if $j eq 'last';
             my ($u, $b) = job_update_and_batch($j);
             push @jobs, [ $u, $b, $j ];
         }
@@ -1944,7 +1944,7 @@ sub cmd_drops {
     if ($jobs) {
         # vblr drops -j JOBID...
         foreach my $j (@ARGV) {
-            $j = (jobs())[-1] if $j eq 'last';
+            $j = (jobs($ucur, $bcur))[-1] if $j eq 'last';
             my ($u, $b) = job_update_and_batch($j);
             push @jobs, [ $u, $b, $j ];
         }
@@ -4162,6 +4162,14 @@ sub cmd_shell {
     while (<STDIN>) {
         next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
         chomp;
+        if (s/^!\s*//) {
+            system($ENV{'SHELL'} || 'sh', '-c', $_);
+            next;
+        }
+        elsif (/^{(.+)}$/) {
+            eval $1;
+            next;
+        }
         @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
         $cmd =~ tr/-/_/;
