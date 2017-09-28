@@ -4123,6 +4123,8 @@ sub cmd_shell {
         h   help
         q   quit
         p   project
+        u   update
+        b   batch
     );
     my $rcfile = glob('~/.vblr/shell.conf');
     if ($rcfile) {
@@ -4274,6 +4276,8 @@ sub shellcmd_project {
             ($p =~ m{^/} && -e "$p/project.kv"))
         {
             $pdir = $p;
+            undef $ucur;
+            undef $bcur;
             orient();
             print "switched to project $p\n";
         }
@@ -4286,6 +4290,79 @@ sub shellcmd_project {
     }
     else {
         print "not in a project\n";
+    }
+}
+
+sub shellcmd_update {
+    #@shell update [UPDATE] :: print or set the current update
+    if (@ARGV) {
+        my ($u) = @ARGV;
+        usage if @ARGV > 1;
+        if (!defined $pcur) {
+            print "not in a project\n";
+        }
+        elsif (!-e "$pdir/updates/$u/update.kv") {
+            print "no such update: $u\n";
+        }
+        else {
+            ### chdir "$pdir/updates/$u" or fatal "chdir $u: $!";
+            $ucur = $u;
+            undef $bcur;
+        }
+    }
+    elsif (defined $ucur) {
+        print "in update $ucur\n";
+    }
+    else {
+        print "not in an update\n";
+    }
+}
+
+sub shellcmd_batch {
+    #@shell batch [BATCH] :: print or set the current batch
+    if (@ARGV) {
+        my ($b) = @ARGV;
+        usage if @ARGV > 1;
+        if (!defined $pcur) {
+            print "not in a project\n";
+        }
+        elsif (!defined $ucur) {
+            print "not in an update\n";
+        }
+        elsif (!-e "$pdir/updates/$ucur/batches/$b/batch.kv") {
+            print "no such batch: $b\n";
+        }
+        else {
+            ### chdir "$pdir/updates/$ucur/batches/$b" or fatal "chdir $b: $!";
+            $bcur = $b;
+        }
+    }
+    elsif (defined $bcur) {
+        print "in batch $bcur\n";
+    }
+    else {
+        print "not in a batch\n";
+    }
+}
+
+sub shellcmd_alias {
+    #@shell alias [NAME COMMAND [ARG...]] :: print aliases or set an alias
+    if (!@ARGV) {
+        print STDERR "aliases:\n";
+        my $aliases = $shell{'aliases'};
+        foreach (sort keys %$aliases) {
+            my $a = $aliases->{$_};
+            $a = join(' ', @$a) if ref $a;
+            printf STDERR "  %-4.4s = %s\n", $_, $a;
+        }
+    }
+    elsif (@ARGV < 2) {
+        usage;
+    }
+    else {
+        my ($name, @command) = @ARGV;
+        $shell{'aliases'}{$name} = \@command;
+        print "set alias $name\n";
     }
 }
 
@@ -4673,7 +4750,7 @@ sub compile_prompt {
         $prompt =~ s/(\\[\\entr])/$unesc{$1}/g;
     }
     else {
-        $prompt = "\e[32;1m%(project)\e[0;1m>\e[0m ";
+        $prompt = "vblr:\e[32;1m%(_project)%(_update)%(_batch)\e[0;1m >\e[0m ";
     }
     $shell{'prompt'} = $prompt;
     my $prompt_expando = String::Expando->new;
@@ -4682,6 +4759,9 @@ sub compile_prompt {
             'project' => $pcur,
             'update'  => $ucur,
             'batch'   => $bcur,
+            '_project' => sub { defined($pcur) ? ' '.$pcur : '' },
+            '_update'  => sub { defined($ucur) ? ' '.$ucur : '' },
+            '_batch'   => sub { defined($bcur) ? ' '.$bcur : '' },
         });
     }
 }
