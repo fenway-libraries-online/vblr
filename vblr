@@ -898,9 +898,12 @@ sub cmd_groups {
 }
 
 sub cmd_projects {
-    #@ projects [[!]STATUS...] :: List projects (with[out] specified statuses)
-    my $verbose;
-    GetOptions( 'v|verbose'  => \$verbose ) or usage;
+    #@ projects [-g GLOB] [[!]STATUS...] :: List projects (with[out] specified statuses)
+    my ($regexp, $verbose);
+    GetOptions(
+        'g|glob=s' => sub { $regexp = glob_to_regex($_[1]) },
+        'v|verbose' => \$verbose,
+    ) or usage;
     fatal "Can't chdir $root: $!" if !chdir $root;
     my %want;
     my %snot = map { /^!(.+)/ ? ('@'.$1 => 1) : () } @ARGV;
@@ -920,6 +923,7 @@ sub cmd_projects {
     foreach my $p (sort keys %pstat) {
         my $pstat = $pstat{$p};
         next if !$want{$pstat};
+        next if defined($regexp) && $p !~ $regexp;
         if ($verbose) {
             printf "%s %s\n", $pstat, $p;
         }
@@ -4168,7 +4172,11 @@ sub cmd_shell {
             next;
         }
         elsif (/^{(.+)}$/) {
-            eval $1;
+            my $result = eval $1;
+            if (defined $result) {
+                chomp $result;
+                print $result, "\n";
+            }
             next;
         }
         @ARGV = shellwords($_);
@@ -4373,6 +4381,22 @@ sub shellcmd_alias {
         $shell{'aliases'}{$name} = \@command;
         print "set alias $name\n";
     }
+}
+
+sub shellcmd_cd {
+    #@shell cd [DIR]
+    usage if @ARGV > 1;
+    my ($dir) = @ARGV;
+    $dir = glob $dir if defined $dir;
+    $dir ||= $pdir || $root;
+    if (defined $bcur) {
+        $dir =~ s{^%b}{updates/$ucur/batches/$bcur};
+    }
+    elsif (defined $ucur) {
+        $dir =~ s{^%u}{updates/$ucur};
+    }
+    chdir $dir or die "cd $dir: $!";
+    print getcwd, "\n";
 }
 
 # --- Other functions
