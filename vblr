@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.172);
+$VERSION = q(1.185);
 
 use String::Expando;
 use File::Kvpar;
