@@ -3719,6 +3719,7 @@ sub add {
         aplast($verb, update => $u);
         run_hook('added', update => $u, purpose => $purpose);
     }
+    $ucur = $u, undef $bcur if %shell;
     return $count;
 }
 
