@@ -2241,6 +2241,7 @@ sub prepare_batch {
     my $prepdir = join('/', $bdir, PREPARING);
     makedir("$prepdir/bin", "$prepdir/conf");
     copy($prep, "$prepdir/bin/prep.used");
+    chmod 0644, "$prepdir/bin/prep.used";
     copy($cfile, "$prepdir/conf/prep.kv.used");
     my $status;
     my $result = ERR;
@@ -2317,6 +2318,87 @@ sub prepare_batch {
         cmd_mkhtml();
     }
     run_hook('prepared', update => $u, batch => $b);
+}
+
+sub cmd_preview {
+    usage if @ARGV > 2;
+    my ($u, $b) = infer_update_and_batch(INPROCESS, NEW, resolve_update_and_batch(@ARGV));
+    quit "Cancelled" if !defined $b;
+    run_prep($u, $b,
+        'preview' => 1,
+    );
+}
+
+sub run_prep {
+    my ($u, $b, %opt) = @_;
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    my ($verbose, $dry_run, $expec, $gen_html) = @opt{qw(verbose dry_run expected gen_html)};
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    fatal "No batch $b in update $u" if ! -e $bdir;
+    my $update = rdupdate($u);
+    my $purpose = $update->{'purpose'} || ADD;
+    my $prep = find('bin/prep.' . $purpose, $bdir, $udir, '.')
+            || find('bin/prep', $bdir, $udir, '.');
+    fatal "No record prep script" if !$prep || !-x $prep || -d $prep;
+    my ($cfile) = find('conf/prep.kv', $bdir, $udir, '.');
+    fatal "No record prep config" if !$cfile || -d $cfile;
+    my $in   = files("$udir/*.mrc");
+    my $out  = join('/', $bdir, PREPARING, 'records.mrc');
+    my $err  = join('/', $bdir, PREPARING, 'prep.err');
+    my $dispos = $opt{'preview'} ? "| marcless -h -n -N $s" : "> $out 2> $err";
+    my $cmd  = "marcn -h $b < $in | $prep -c $cfile -u $u -b $b $dispos";
+    my $result = ERR;
+    local $ENV{'VBLR_PROJECT'} = $pcur;
+    local $ENV{'VBLR_UPDATE' } = $u;
+    local $ENV{'VBLR_BATCH'  } = $b;
+    local $ENV{'VBLR_PURPOSE'} = $purpose;
+    local $ENV{'VBLR_CONFDIR'} = dirname($cfile);
+    my $status = system $cmd;
+    if ($opt{'preview'}) {
+        fatal "prep failed: exit status $?" if $status != 0;
+    }
+    elsif ($status != 0) {
+        print STDERR "Record prep failed; stderr follows\n";
+    }
+    elsif (($status = system(qw(marcdiag -s -q -o), $out)) != 0) {
+        print STDERR "Record prep produced an invalid file\n";
+    }
+    else {
+        my %marc = marc($out);
+        my $count = $marc{'count'};
+        my $batch = rdbatch($u, $b);
+        $expec = $batch->{'count'} if !defined $expec;
+        $expec = $e - $s + 1       if !defined $expec;
+        #$expec *= 2 if $marc{'type'} eq BIBMFHD;
+        if ($count == $expec) {
+            $result = OK;
+            print STDERR "Record prep complete; no errors\n" if $opt{'verbose'};
+        }
+        elsif ($count == 0) {
+            print STDERR "Record prep failed silently without producing any records\n";
+            $status = -1;
+        }
+        else {
+            print STDERR "Record prep added or dropped some records: expected $expec, got $count\n";
+            if ($opt{'force'}) {
+                $result = OK;
+                if ($batch->{'count'} != $count) {
+                    print STDERR "Batch count adjusted\n";
+                    $batch->{'count'} = $count;
+                    wrbatch($u, $b, $batch);
+                }
+            }
+            else {
+                $status = -1;
+            }
+        }
+    }
+}
+
+sub preview_batch {
+    # What would prepped records look like?
 }
 
 sub load_batch {
