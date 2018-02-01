@@ -1585,7 +1585,7 @@ sub cmd_cat {
     if (rdstatus($udir) eq ARCHIVED) {
         fatal "Update $u is archived" if defined $b;
         my $file = find_archived_update_marc($u);
-        $err = system(qw(tar -xzf), "$udir/\@archived/archive.tar.gz", '-O', $file);
+        $err = tar(-xzf => "$udir/\@archived/archive.tar.gz", '-O', $file) ? 0 : $?;
     }
     else {
         my ($start, @files) = find_marc($u, $b);
@@ -2693,7 +2693,7 @@ sub archive_update {
     my @files = sort grep { !/^[.@]/ && $_ ne 'update.kv' } map { basename($_) } glob("$udir/*");
     my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
     eval {
-        system('tar', -C => $udir, -czf => $tarball, @files) == 0
+        tar(-C => $udir, -czf => $tarball, @files)
             or die "Can't create archive for update $u: $?\n";
         rmrf(map { "$udir/$_" } @files)
             or die "Can't remove files: $?\n";
@@ -2721,7 +2721,7 @@ sub unarchive_update {
     wrstatus($udir, ARCHIVING);
     my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
     eval {
-        system('tar', -C => $udir, -xzf => $tarball) == 0
+        tar(-C => $udir, -xzf => $tarball)
             or die "Can't extract files from archive for update $u: $?\n";
         unlink $tarball
             or die "Can't remove $tarball: $!\n";
@@ -4987,6 +4987,10 @@ sub sum {
 
 sub rmrf {
     system('rm', '-Rf', @_) == 0;
+}
+
+sub tar {
+    system('tar', @_) == 0;
 }
 
 # vim:set nu:
