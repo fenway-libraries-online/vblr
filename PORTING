@@ -1,0 +1,65 @@
+system("$root/bin/mkdrops", @ARGV);
+system(qw(make clean all));
+system('cat', @files);
+system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
+system(@$cmd, @$files);
+system $cmd
+system(qw(marcdiag -s -q -o), $out)) != 0) {
+system $cmd;
+system(qw(marcdiag -s -q -o), $out)) != 0) {
+system(@cmd);
+system($f);
+my ($exec) = grep { -x && !-d _ } files("$sdir/bin/enum", 'bin/enum');
+my $cmd = "$exec -n $sq | tee sets/$sdirq/records.list";
+system($ENV{'SHELL'} || 'sh', '-c', $_);
+system($editor, @opt, @ARGV);
+system($ENV{'SHELL'} || 'zsh');
+system('rm', '-Rf', @_) == 0;
+system('tar', @_) == 0;
+
+open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
+open my $fh2, '-|', qw(vmatch -P -H), '-w' => $warn, '-r' => $replace, '-f' => $files[0], @params
+open my $fh, '-|', qw(tar -tzf), "$udir/\@archived/archive.tar.gz", '*.mrc'
+open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
+open my $fh, '-|', @cmd or fatal "Can't run marc2html: $!";
+open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
+open $fh, '|-', @sendmail or die "Can't run sendmail: $!";
+open my $fh, '-|', 'vbilog', $log or die;
+open $fh, '-|', $cmd or die;
+open $fh, '-|', $cmd or die "Can't extract set members from $sdir/source.mrc: $!";
+open my $fh, '-|', 'vbilog', $logfile or fatal "Can't run vbilog: $!";
+open my $fh, '-|', qw(file -b -i -L), $f or die "Can't run file: $!";
+open my $fh, '-|', qw(marcdiag -peOso), $f or fatal "exec marcdiag: $!";
+
+ils.match <- vmatch
+    -P
+    -H
+    -w WARN
+    -r REPLACE
+    -f FILE
+    PARAM...
+
+ils.stage
+
+ils.load <- vload 
+    -c $config_file
+    -o $j
+    -f $file
+    -d $outdir
+    -n (dry-run)
+    -k (keyword index)
+    -i $profile
+    -S (???)
+    -x (deletions)
+    -h (update MFHDs)
+    -m (interleaved)
+
+ils.results <- vbilog
+
+ils.batch?
+
+ils.fetch <- vjobget?
+
+ils.profile? <- vbirule
+
+
