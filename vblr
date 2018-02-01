@@ -1085,7 +1085,7 @@ sub remove_job {
     my ($u, $b, $j) = @_;
     my $dir = "updates/$u/batches/$b/jobs";
     wrlist($dir, grep { $_ ne $j } rdlist($dir));
-    system('rm', '-Rf', "$dir/$j");
+    rmrf("$dir/$j");
     aplog('remove',
         'update' => $u,
         'batch' => $b,
@@ -1101,7 +1101,7 @@ sub remove_batch {
     }
     my $dir = "updates/$u/batches";
     wrlist($dir, grep { $_ ne $b } rdlist($dir));
-    system('rm', '-Rf', "$dir/$b");
+    rmrf("$dir/$b");
     aplog('remove',
         'update' => $u,
         'batch' => $b,
@@ -1116,7 +1116,7 @@ sub remove_update {
     }
     my $dir = 'updates';
     wrlist($dir, grep { $_ ne $u } rdlist($dir));
-    system('rm', '-Rf', "$dir/$u");
+    rmrf("$dir/$u");
     aplog('remove',
         'update' => $u,
     );
@@ -2695,7 +2695,7 @@ sub archive_update {
     eval {
         system('tar', -C => $udir, -czf => $tarball, @files) == 0
             or die "Can't create archive for update $u: $?\n";
-        system(qw(rm -Rf), map { "$udir/$_" } @files) == 0
+        rmrf(map { "$udir/$_" } @files)
             or die "Can't remove files: $?\n";
     } or do {
         unlink ARCHIVING . '/archive.tar.gz';
@@ -2723,8 +2723,8 @@ sub unarchive_update {
     eval {
         system('tar', -C => $udir, -xzf => $tarball) == 0
             or die "Can't extract files from archive for update $u: $?\n";
-        system(qw(rm -Rf), $tarball) == 0
-            or die "Can't remove $tarball: $?\n";
+        unlink $tarball
+            or die "Can't remove $tarball: $!\n";
     } or do {
         wrstatus($udir, ARCHIVED);
         fatal $@;
@@ -4983,6 +4983,10 @@ sub sum {
     my $n = 0;
     $n += $_ for @_;
     return $n;
+}
+
+sub rmrf {
+    system('rm', '-Rf', @_) == 0;
 }
 
 # vim:set nu:
