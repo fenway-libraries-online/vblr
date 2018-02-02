@@ -86,8 +86,10 @@ use constant REVIEW    => '@review';     # - U B J
 use constant WAITING   => '@waiting';    # P U - -
 use constant PREPARING => '@preparing';  # - - B -
 use constant PREPARED  => '@prepared';   # - - B -
+use constant STAGING   => '@staging';    # - - - J
+use constant STAGED    => '@staged';     # - - B J
 use constant LOADING   => '@loading';    # - - - J
-use constant LOADED    => '@loaded';     # - - J J
+use constant LOADED    => '@loaded';     # - - B J
 use constant FINISHED  => '@finished';   # - U B -
 use constant ARCHIVING => '@archiving';  # P U - -
 use constant ARCHIVED  => '@archived';   # P U - -
@@ -1277,6 +1279,28 @@ sub cmd_load {
     load_batch($u, $b, %opt);
 }
 
+sub cmd_stage {
+    #@ stage [-vnx] [UPDATE [RANGE]] :: Stage records for later loading
+    my ($delete, $verbose, $dry_run);
+    $verbose = 1 if -t STDIN;
+    GetOptions(
+        'x|delete' => \$delete,
+        'v|verbose' => \$verbose,
+        'n|dry-run' => \$dry_run,
+    ) or usage;
+    $verbose = 1 if $dry_run;
+    usage if @ARGV > 2;
+    my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
+    quit "Cancelled" if !defined $b;
+    my %opt = (
+        'delete'         => $delete,
+        'verbose'        => $verbose,
+        'dry_run'        => $dry_run,
+        'stage'          => 1,
+    );
+    load_batch($u, $b, %opt);
+}
+
 sub mkdrops {
     local @ARGV = @_;
     cmd_mkdrops();
@@ -2401,10 +2425,120 @@ sub preview_batch {
     # What would prepped records look like?
 }
 
+sub stage_batch {
+    my ($u, $b, %opt) = @_;
+    load_batch($u, $b, %opt, 'stage' => 1);
+}
+
+sub load_staged_job {
+    my ($u, $b, $j) = @_;
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    my $n = $e - $s + 1;
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    my $jdir = "$bdir/jobs/$j";
+    my $jfile = "$jdir/job.kv";
+    my $rfile = "$bdir/jobs/$j/records.mrc";
+    fatal "No such batch: $u $b" if ! -e $bdir;
+    fatal "Batch not prepared: $u $b" if rdstatus($bdir) ne PREPARED;
+    fatal "No such job: $u $b $j" if ! -e $jfile;
+    my $job = rdkvfile($jfile);
+    $job->{'date'} = $now;
+    wrkvfile($jfile, $job);
+    $job->{'file'   } = $rfile;
+    $job->{'project'} = $pcur;
+    $job->{'update' } = $u;
+    $job->{'batch'  } = $b;
+    wrstatus($jdir, STAGING);
+    run_hook('staging', update => $u, batch => $b, job => $j, purpose => $purpose);
+    my $cmd = which('ils.stage', %$job)
+        or fatal "cannot find ils.stage";
+    my ($err, $out) = run('ils.stage', 'args' => [kvparams(%$job)], 'env' => {envparams(%$job)});
+    if ($err == 0) {
+        wrstatus($jdir, STAGED);
+        run_hook('staged', update => $u, batch => $b, job => $j, purpose => $purpose);
+        aplog('stage',
+            'update' => $u,
+            'batch' => $b,
+            'job' => $j,
+            'count' => $n,
+        );
+        apnext('load', update => $u, batch => $b, job => $j);
+    }
+    else {
+        print STDERR "Record staging failed\n";
+        wrstatus($jdir, ERROR);
+        wrstatus($bdir, ERROR);
+    }
+}
+
+sub kvparams {
+    my %arg = @_;
+    return map { join '=', $arg{$_}) } sort keys %arg);
+}
+
+sub envparams {
+    my %arg = @_;
+    return map { ( 'VBLR_'.uc($_), $arg{$_} ) } keys %arg;
+}
+
+sub which {
+    my ($cmd, %arg) = @_;
+    my @where = ($root);
+    my ($p, $u, $b, $j) = @arg{qw(project update batch job)};
+    if (defined $p) {
+        my $this_pdir = pdir($p);
+        push @where, $this_pdir;
+        if (defined $u) {
+            push @where, my $udir = "$this_pdir/updates/$u";
+            push @where, "$udir/batches/$b"         if defined $b;
+            push @where, "$udir/batches/$b/jobs/$j" if defined $j;
+        }
+    }
+    my $f = find("bin/$cmd", reverse @where);
+    return $f if defined $f && -x $f;
+}
+
+sub run {
+    my ($cmd, %arg) = @_;
+    my $args = $arg{'args'};
+    my $env  = $arg{'env'};
+    local %ENV = (%ENV, %{ $env || {} });;
+    $cmd = which($cmd)
+        or fatal "
+    my @where = ($root);
+    my ($p, $u, $b, $j) = @arg{qw(project update batch job)};
+    if (defined $p) {
+        my $this_pdir = pdir($p);
+        push @where, $this_pdir;
+        if (defined $u) {
+            push @where, my $udir = "$this_pdir/updates/$u";
+            push @where, "$udir/batches/$b"         if defined $b;
+            push @where, "$udir/batches/$b/jobs/$j" if defined $j;
+        }
+    }
+    my $f = find("bin/$cmd", reverse @where);
+    if (defined $f && -x $f) {
+        while (my ($k, $v) = each %arg) {
+            delete $ENV{'VBLR_'.uc($k)};
+            $ENV{'VBLR_'.uc($k)} = $v if defined $v;
+        }
+        my @args = map { join '=', $arg{$_}) } sort keys %arg);
+        open my $fh, '-|', $f, @args or return ($!, []);
+        my @out = <$fh>;
+        close $fh or return ($!, \@out);
+        return (0, \@out);
+    }
+}
+
+sub which {
+}
+
 sub load_batch {
     my ($u, $b, %opt) = @_;
-    my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html)
-        = @opt{qw(delete verbose dry_run autogen_loaded gen_html)};
+    my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html, $stage, $staged_job)
+        = @opt{qw(delete verbose dry_run autogen_loaded gen_html stage $staged_job)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
     my $n = $e - $s + 1;
@@ -2450,49 +2584,75 @@ sub load_batch {
     }
     my $profile = $conf->{'profile'};
     fatal "No load profile configured" if !defined($profile) && !$update_mfhds;
-    my $j = mkjobid();
+    my $j = $staged_job || mkjobid();
     my $jdir = "$bdir/jobs/$j";
     my $file = "$bdir/jobs/$j/records.mrc";
-    my @cmd = (
-        'vload',
-        '-c' => $cfile,
-        '-o' => $j,
-        '-f' => $file,
-        '-d' => "$jdir/output",
+    my %arg = (
+        'project' => $pcur,
+        'update' => $u,
+        'batch' => $b,
+        'job' => $j,
+        'purpose' => $purpose,
+        'file' => $file,
     );
-    push @cmd, '-n' if $opt{'dry_run'};
-    push @cmd, '-k' if $opt{'keyword_index'};
+    $arg{'opt-keyword-index'} = 1 if $opt{'keyword_index'};
     if (@delete) {
-        push @cmd, '-S', '-i' => $profile, '-x', @delete;
+        $arg{'opt-strict'} = 0;
+        $arg{'profile'} = $profile;
+        $arg{'delete'} = join(',', @delete);
     }
     elsif ($update_mfhds) {
-        push @cmd, '-h';
+        $arg{'opt-update-mfhds'} = 1;
     }
     elsif ($interleaved) {
-        push @cmd, '-m', '-i' => $profile;
+        $arg{'opt-interleaved'} = 1;
+        $arg{'profile'} = $profile;
     }
     else {
-        push @cmd, '-i' => $profile;
+        $arg{'profile'} = $profile;
     }
+    my @cmd = ('load', map { sprintf("%s=%s", $_, $arg{$_}) } sort keys %arg);
     if ($opt{'dry_run'}) {
         print STDERR join(' ', 'command:', @cmd), "\n";
         return;
     }
-    mkjob($u, $b, $j);
-    my $job = {
-        'code' => $j,
-        'date' => $now,
-        'file' => $file,
-        defined($profile) ? ('profile' => $profile) : (),
-        'purpose' => $purpose,
-        'interleaved' => $interleaved,
-    };
-    wrkvfile("$jdir/job.kv", $job);
+    my $jfile = "$jdir/job.kv";
+    my $job;
+    if ($staged_job) {
+        fatal "no such staged job: $staged_job" if !-e $jfile;
+        $job = rdkvfile($jfile);
+        $job->{'date'} = $now;
+    }
+    else {
+        mkjob($u, $b, $j);
+        $job = {
+            'code' => $j,
+            'date' => $now,
+            'file' => $file,
+            defined($profile) ? ('profile' => $profile) : (),
+            'purpose' => $purpose,
+            'interleaved' => $interleaved,
+        };
+    }
+    wrkvfile($jfile, $job);
+    my $err;
+    if ($stage) {
+        wrstatus($jdir, STAGING);
+        run_hook('staging', update => $u, batch => $b, job => $j, purpose => $purpose);
+        $err = system(@cmd);
+        wrstatus($jdir, STAGED);
+        run_hook('staged', update => $u, batch => $b, job => $j, purpose => $purpose);
+        aplog('stage',
+            'update' => $u,
+            'batch' => $b,
+            'job' => $j,
+            'count' => $n,
+        );
+        apnext('load', update => $u, batch => $b, job => $j);
+        return;  # All done!
+    }
     wrstatus($jdir, LOADING);
-    # Actually load the records!
     run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose);
-    my $err = system(@cmd);
-    wrstatus($jdir, FINISHED);
     my $log = "$jdir/output/$j.log";
     my @results = load_results($log);
     my %num;
@@ -4566,6 +4726,12 @@ sub mkjob {
     makedir("$jdir/output");
     aplist("$bdir/jobs", $j);
     return $jdir;
+}
+
+sub pdir {
+    my ($p) = @_;
+    return $p if $p =~ m{^/};
+    return "$root/$p";
 }
 
 sub pcode {

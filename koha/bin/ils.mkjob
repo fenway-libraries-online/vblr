@@ -1,0 +1,117 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use MARC::File::USMARC;
+use Digest::MD5 qw(md5_hex);
+
+use C4::Context;
+#use C4::Biblio;
+use C4::ImportBatch;
+use C4::Matcher;
+#use C4::BackgroundJob;
+#use C4::MarcModificationTemplates;
+#use Koha::Plugins;
+
+my $salt = sprintf('%d %d %s', time, $$, rand);
+my %batch = (
+    'import_status'  => 'staging',
+    'batch_type'     => 'batch',
+    'record_type'    => 'biblio',
+    'file_name'      => '/dev/null',
+    'comments'       => '',
+    'overlay_action' => 'create_new',
+    'nomatch_action' => 'create_new',
+    'item_action'    => 'always_add',
+);
+my $char_encoding = 'UTF-8';
+my $marc_flavor = 'MARC21';
+my %enc = (
+    'a' => 'UTF-8',
+    ' ' => 'MARC8',
+);
+my %rtype = (
+    ( map { $_ => 'biblio'  } qw(a c d e f g i j k m o p r t) ),
+    ( map { $_ => 'holdings'} qw(u v x y) ),
+    'z' => 'auth',
+);
+
+foreach (@ARGV) {
+    $meta{'project'} = $1, next if /^project=(.+)$/;
+    $meta{'update' } = $1, next if /^update=(.+)$/;
+    $meta{'batch'  } = $1, next if /^batch=(.+)$/;
+    $meta{'job'    } = $1, next if /^job=(.+)$/;
+    $batch{'record_type'   } = $1, next if /^rectype=(biblio|auth)$/;
+    $batch{'file_name'     } = $1, next if /^file=(.+)$/;
+    $batch{'comments'      } = $1, next if /^description=(.*)$/;
+    if (/^purpose=add$/) {
+        $batch{'overlay_action'} = 'create_new';
+        $batch{'nomatch_action'} = 'create_new';
+    }
+    elsif (/^purpose=replace$/) {
+        $batch{'overlay_action'} = 'replace';
+        $batch{'nomatch_action'} = 'ignore';
+        next;
+    }
+    elsif (/^purpose=delete$/) {
+        fatal("deletes not yet implemented");
+    }
+    else {
+        usage("unrecognized parameter: $_");
+    }
+}
+
+# Read records from file
+my $fh;
+
+my $f = $batch{'file_name'};
+
+open $fh, '<', $f or fatal("open $f: $!");
+binmode $fh;
+my ($num_records, $rec_type, $encoding) = preflight($fh);
+seek $fh, 0, 0 or fatal("seek to beginning of file $f: $!");
+
+my $parse_items = $batch{'item_action'} ne 'ignore';
+my $batch_id = AddImportBatch(\%batch);
+
+printf('%s/%s/%s/%d', @meta{qw(project update batch)}, $batch_id);
+
+# --- Functions
+
+sub preflight {
+    my ($fh) = @_;
+    my $n = 0;
+    my (%enc2num, %rty2num);
+    local $/ = "\x1d";
+    while (<$fh>) {
+        $n++;
+        /^([0-9]{5})/ or fatal("invalid leader in record $n of file $f");
+        int($1) == length($_) or fatal("wrong record length in record $n of file $f");
+        $rty2num{$rtype{substr($_,6,1)} or fatal("unrecognized record type in record $n of file $f")}++;
+        $enc2num{$enc{substr($_,9,1)} or fatal("unrecognized character set encoding in record $n of file $f")}++;
+    }
+    close $fh;
+    fatal("multiple record types in file $f") if scalar(keys %rty2num) > 1;
+    fatal("multiple character set encodings in file $f") if scalar(keys %enc2num) > 1;
+    return ($n, keys(%rty2num), keys(%enc2num));
+}
+
+sub usage {
+    print STDERR <<'EOS';
+usage: ils.mkjob PARAM...\n";
+parameters:
+  [rectype=biblio|auth]
+  [file=FILE]
+  [description=DESCRIP]
+  [purpose=add|replace]
+  [profile=PROFILE]
+EOS
+    exit 1;
+}
+
+sub fatal {
+    print STDERR "ils.mkjob: @_\n";
+    exit 2;
+}
+
