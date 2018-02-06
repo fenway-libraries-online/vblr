@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.185);
+$VERSION = q(1.200);
 
 use String::Expando;
 use File::Kvpar;
@@ -86,7 +86,7 @@ use constant REVIEW    => '@review';     # - U B J
 use constant WAITING   => '@waiting';    # P U - -
 use constant PREPARING => '@preparing';  # - - B -
 use constant PREPARED  => '@prepared';   # - - B -
-use constant STAGING   => '@staging';    # - - - J
+use constant STAGING   => '@staging';    # - - B J
 use constant STAGED    => '@staged';     # - - B J
 use constant LOADING   => '@loading';    # - - - J
 use constant LOADED    => '@loaded';     # - - B J
@@ -108,6 +108,8 @@ my @statuses = (
     [ WAITING,   '[w]',  'wtg',  1    ],
     [ PREPARING, '[p]',  'ppg',  1    ],
     [ PREPARED,  '[P]',  'ppd',  1    ],
+    [ STAGING,   '[s]',  'stg',  1    ],
+    [ STAGED,    '[S]',  'std',  1    ],
     [ LOADING,   '[l]',  'ldg',  1    ],
     [ LOADED,    '[L]',  'ldd',  1    ],
     [ FINISHED,  '[x]',  'fin',  1    ],
@@ -1276,7 +1278,13 @@ sub cmd_load {
         'gen_html'       => $gen_html,
         'keyword_index'  => $keyword_index,
     );
-    load_batch($u, $b, %opt);
+    my $status = rdstatus("updates/$u/batches/$b");
+    if ($status eq STAGED) {
+        load_staged_batch($u, $b, %opt);
+    }
+    else {
+        load_batch($u, $b, %opt);
+    }
 }
 
 sub cmd_stage {
@@ -1296,9 +1304,8 @@ sub cmd_stage {
         'delete'         => $delete,
         'verbose'        => $verbose,
         'dry_run'        => $dry_run,
-        'stage'          => 1,
     );
-    load_batch($u, $b, %opt);
+    stage_batch($u, $b, %opt);
 }
 
 sub mkdrops {
@@ -1555,36 +1562,43 @@ sub cmd_match {
     $profile ||= $conf->{'profile'} || fatal "No load profile configured";
     my $rectype = $update->{'marc-type'} || fatal "No MARC record type for update $u";
     $rectype = BIBMFHD if $conf->{'interleaved'};
-    my @delete  = $update->{'delete'} ? qw(-x) : qw();
-    open my $fh1, '-|', 'vbirule', @delete, '-t', $rectype, $profile
-        or fatal "Can't run vbirule: $!";
-    my @actions = map { split /\s+/ } <$fh1>;
-    my ($warn, $replace, @params) = split /\s/, qx/vmatchparams -x $profile/;
-    open my $fh2, '-|', qw(vmatch -P -H), '-w' => $warn, '-r' => $replace, '-f' => $files[0], @params
-        or fatal "Can't run vmatch: $!";
-    local $/ = '';
-    while (<$fh2>) {
-        chomp;
-        my ($num, @matches) = split /\n/;
-        if (@matches == 0) {
-            print "$num add\n";
-            next;
+    my $cmd = which('ils.march') or fatal "can't find ils.match";
+    my %arg = (
+        %$update,
+        'project' => $pcur,
+        'update' => $u,
+        'batch' => $b,
+        'job' => $j,
+        'record_type' => $rectype,
+        'profile' => $profile,
+    );
+    my ($err, $out) = run($cmd,
+        'args' => [kvparams(%arg)],
+        'env'  => {envparams(%arg)},
+        'code' => sub {
+            chomp;
+            my ($num, @matches) = split /\n/;
+            if (@matches == 0) {
+                print "$num add\n";
+                return;
+            }
+            my %match;
+            foreach (@matches) {
+                my ($result, undef, $id) = split /\s+/, $_, 3;
+                push @{ $match{$result} ||= [] }, $id;
+            }
+            if (my $x = delete $match{'X'}) {
+                print join(' ', $num, 'dis', @$x), "\n";
+            }
+            elsif (my $r = delete $match{'R'}) {
+                print join(' ', $num, 'mat', @$r), "\n";
+            }
+            else {
+                print "$num add *\n";
+            }
         }
-        my %match;
-        foreach (@matches) {
-            my ($result, undef, $id) = split /\s+/, $_, 3;
-            push @{ $match{$result} ||= [] }, $id;
-        }
-        if (my $x = delete $match{'X'}) {
-            print join(' ', $num, 'dis', @$x), "\n";
-        }
-        elsif (my $r = delete $match{'R'}) {
-            print join(' ', $num, 'mat', @$r), "\n";
-        }
-        else {
-            print "$num add *\n";
-        }
-    }
+    );
+    fatal "Can't run ils.profile", @$out if $err != 0;
 }
 
 sub cmd_www {
@@ -2427,7 +2441,55 @@ sub preview_batch {
 
 sub stage_batch {
     my ($u, $b, %opt) = @_;
-    load_batch($u, $b, %opt, 'stage' => 1);
+    my ($delete, $verbose, $dry_run) = @opt{qw(delete verbose dry_run)};
+    my ($s, $e);
+    ($s, $e, $b) = batch_range($b, $u);
+    my $n = $e - $s + 1;
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    fatal "No such batch: $u $b" if ! -e $bdir;
+    fatal "Batch not prepared: $u $b" if rdstatus($bdir) ne PREPARED;
+    my ($cfile) = find('conf/load.kv', $bdir, $udir, '.');
+    fatal "Load config file not found" if !$cfile || !-e $cfile;
+    my $conf = rdkvfile($cfile);
+    my $update = rdupdate($u);
+    my $purpose = $update->{'purpose'} || ADD;
+    my $profile = $conf->{'profile'};
+    #fatal "No load profile configured" if !defined($profile) && !$update_mfhds;
+    my $j = mkjobid();
+    my $jdir = "$bdir/jobs/$j";
+    my $jfile = "$jdir/job.kv";
+    my $rfile = "$jdir/records.mrc";
+    my $job = {
+        'code' => $j,
+        'date' => $now,
+        'file' => $rfile,
+        defined($profile) ? ('profile' => $profile) : (),
+        'purpose' => $purpose,
+        #'interleaved' => $interleaved,
+    };
+    mkjob($u, $b, $j, STAGING);
+    wrkvfile($jfile, $job);
+    run_hook('staging', update => $u, batch => $b, job => $j, purpose => $purpose);
+    my $cmd = which('ils.stage', %$job) or fatal "cannot find ils.stage";
+    my ($err, $out) = run($cmd, 'args' => [kvparams(%$job)], 'env' => {envparams(%$job)});
+    if ($err == 0) {
+        wrstatus($jdir, STAGED);
+        # ??? wrstatus($bdir, STAGED);
+        run_hook('staged', update => $u, batch => $b, job => $j, purpose => $purpose);
+        aplog('stage',
+            'update' => $u,
+            'batch' => $b,
+            'job' => $j,
+            'count' => $n,
+        );
+        apnext('load', update => $u, batch => $b, job => $j);
+    }
+    else {
+        print STDERR "Record staging failed\n";
+        wrstatus($jdir, ERROR);
+        wrstatus($bdir, ERROR);
+    }
 }
 
 sub load_staged_job {
@@ -2451,31 +2513,11 @@ sub load_staged_job {
     $job->{'update' } = $u;
     $job->{'batch'  } = $b;
     wrstatus($jdir, STAGING);
-    run_hook('staging', update => $u, batch => $b, job => $j, purpose => $purpose);
-    my $cmd = which('ils.stage', %$job)
-        or fatal "cannot find ils.stage";
-    my ($err, $out) = run('ils.stage', 'args' => [kvparams(%$job)], 'env' => {envparams(%$job)});
-    if ($err == 0) {
-        wrstatus($jdir, STAGED);
-        run_hook('staged', update => $u, batch => $b, job => $j, purpose => $purpose);
-        aplog('stage',
-            'update' => $u,
-            'batch' => $b,
-            'job' => $j,
-            'count' => $n,
-        );
-        apnext('load', update => $u, batch => $b, job => $j);
-    }
-    else {
-        print STDERR "Record staging failed\n";
-        wrstatus($jdir, ERROR);
-        wrstatus($bdir, ERROR);
-    }
 }
 
 sub kvparams {
     my %arg = @_;
-    return map { join '=', $arg{$_}) } sort keys %arg);
+    return map { join '=', $_, $arg{$_} } sort keys %arg;
 }
 
 sub envparams {
@@ -2504,9 +2546,10 @@ sub run {
     my ($cmd, %arg) = @_;
     my $args = $arg{'args'};
     my $env  = $arg{'env'};
+    my $code = $arg{'code'};
     local %ENV = (%ENV, %{ $env || {} });;
     $cmd = which($cmd)
-        or fatal "
+        or fatal "can't find script $cmd";
     my @where = ($root);
     my ($p, $u, $b, $j) = @arg{qw(project update batch job)};
     if (defined $p) {
@@ -2524,21 +2567,39 @@ sub run {
             delete $ENV{'VBLR_'.uc($k)};
             $ENV{'VBLR_'.uc($k)} = $v if defined $v;
         }
-        my @args = map { join '=', $arg{$_}) } sort keys %arg);
+        my @args = kvparams(%arg);
         open my $fh, '-|', $f, @args or return ($!, []);
-        my @out = <$fh>;
-        close $fh or return ($!, \@out);
-        return (0, \@out);
+        if ($code) {
+            local $_;
+            while (<$fh>) {
+                $code->();
+            }
+            close $fh or return ($!);
+            return (0);
+        }
+        else {
+            my @out = <$fh>;
+            close $fh or return ($!, \@out);
+            return (0, \@out);
+        }
     }
 }
 
-sub which {
+sub load_staged_batch {
+    my ($u, $b, %opt) = @_;
+    my $udir = "updates/$u";
+    my $bdir = "$udir/batches/$b";
+    my ($jstat, @etc) = glob("$bdir/jobs/*/".STAGED);
+    fatal "no staged job: update $b batch $b" if !defined $jstat;
+    fatal "multiple staged jobs: update $b batch $b" if @etc;
+    my $j = basename(dirname($jstat));
+    load_batch($u, $b, %opt, 'staged_job' => $j);
 }
 
 sub load_batch {
     my ($u, $b, %opt) = @_;
-    my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html, $stage, $staged_job)
-        = @opt{qw(delete verbose dry_run autogen_loaded gen_html stage $staged_job)};
+    my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html, $staged_job)
+        = @opt{qw(delete verbose dry_run autogen_loaded gen_html $staged_job)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
     my $n = $e - $s + 1;
@@ -2635,23 +2696,9 @@ sub load_batch {
         };
     }
     wrkvfile($jfile, $job);
-    my $err;
-    if ($stage) {
-        wrstatus($jdir, STAGING);
-        run_hook('staging', update => $u, batch => $b, job => $j, purpose => $purpose);
-        $err = system(@cmd);
-        wrstatus($jdir, STAGED);
-        run_hook('staged', update => $u, batch => $b, job => $j, purpose => $purpose);
-        aplog('stage',
-            'update' => $u,
-            'batch' => $b,
-            'job' => $j,
-            'count' => $n,
-        );
-        apnext('load', update => $u, batch => $b, job => $j);
-        return;  # All done!
-    }
+    my $cmd = which('ils.load', %$job, %arg) or fatal "cannot find ils.load";
     wrstatus($jdir, LOADING);
+    my ($err, $out) = run($cmd, 'args' => [kvparams(%$job, %arg)], 'env' => {envparams(%$job, %arg)});
     run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose);
     my $log = "$jdir/output/$j.log";
     my @results = load_results($log);
@@ -4374,7 +4421,7 @@ sub cmd_shell {
         b   batch
     );
     my $rcfile = glob('~/.vblr/shell.conf');
-    if ($rcfile) {
+    if ($rcfile && -e $rcfile) {
         %shell = %{
             rdconfigfile(
                 $rcfile,
@@ -4717,12 +4764,13 @@ sub shellcmd_receive {
 # --- Other functions
 
 sub mkjob {
-    my ($u, $b, $j) = @_;
+    my ($u, $b, $j, $status) = @_;
+    $status ||= PREPARED;
     idval($j => join('/', $project->{'id'}, $u, $b));
     my $bdir = "updates/$u/batches/$b";
     makedir("$bdir/jobs");
     my $jdir = "$bdir/jobs/$j";
-    rename "$bdir/\@prepared", $jdir;
+    rename "$bdir/$status", $jdir;
     makedir("$jdir/output");
     aplist("$bdir/jobs", $j);
     return $jdir;
