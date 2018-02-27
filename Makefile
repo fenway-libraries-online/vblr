@@ -1,7 +1,7 @@
 all: check
 
 check:
-	@vperl -c vblr || exit 2
+	@perl -c vblr || exit 2
 
 install: vblr check
 	install vblr ~/bin/
