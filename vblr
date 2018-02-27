@@ -5,7 +5,7 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.200);
+$VERSION = q(1.201);
 
 use String::Expando;
 use File::Kvpar;
@@ -196,7 +196,7 @@ GetOptions(
     'p|project=s' => \$pdir,
 ) or usage_commands;
 
-my %skip_orient = map { $_ => 1 } qw( init help version projects groups www iddb which shell );
+my %skip_orient = map { $_ => 1 } qw( init help version projects group groups www iddb which shell );
 my %iddb;
 
 @ARGV = qw(shell) if !@ARGV;
@@ -894,6 +894,39 @@ sub cmd_finish {
     }
 }
 
+sub cmd_group {
+    #@ group [-cp] [-n NAME] [-s SHORTNAME] GROUP
+    my ($create, $projects, $name, $shortname);
+    GetOptions(
+        'c|create' => \$create,
+        'p|projects' => \$projects,
+        'n|name=s' => \$name,
+        's|short-name=s' => \$shortname,
+    ) or usage;
+    usage if @ARGV != 1;
+    my ($g) = @ARGV;
+    my $d = "groups/$g";
+    fatal "Can't chdir $root: $!" if !chdir $root;
+    my $f = "$d/group.kv";
+    if ($create) {
+        fatal "Group $g already exists" if -e $d;
+        ask $name, 'Full group name: ' if !defined $name;
+        ask $shortname, 'Short group name: ', $name if !defined $shortname;
+        symlink "$d/projects", $g or fatal "Can't symlink $g: $!";
+        makedir($d, "$d/projects");
+        aplist("$d/projects");
+        wrkvfile($f, {
+            'code' => $g,
+            'name' => $name,
+            'shortname' => $shortname,
+        });
+    }
+    elsif ($projects) {
+        fatal "No such group: $g" if ! -f $f;
+        print $_, "\n" for rdlist("$d/projects");
+    }
+}
+
 sub cmd_groups {
     #@ groups :: List groups (libraries)
     usage if @ARGV;
@@ -1562,7 +1595,7 @@ sub cmd_match {
     $profile ||= $conf->{'profile'} || fatal "No load profile configured";
     my $rectype = $update->{'marc-type'} || fatal "No MARC record type for update $u";
     $rectype = BIBMFHD if $conf->{'interleaved'};
-    my $cmd = which('ils.march') or fatal "can't find ils.match";
+    my $cmd = which('ils.match') or fatal "can't find ils.match";
     my %arg = (
         %$update,
         'project' => $pcur,
