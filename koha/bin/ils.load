@@ -1,0 +1,257 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use MARC::File::USMARC;
+
+use C4::Context;
+use C4::Charset;
+use C4::Biblio;
+use C4::ImportBatch;
+use C4::Matcher;
+
+sub usage;
+sub marciter(&$);
+
+(my $prog = $0) =~ s{.+/}{};
+(my $cmd = $prog) =~ s{^ils\.}{};
+
+&{ __PACKAGE__->can('cmd_'.$cmd) or usage };
+
+# --- Commands
+
+sub cmd_stage {
+    usage() if @ARGV < 1;
+    my $batch = argv2batch(@ARGV);
+    stage_batch($batch);
+}
+
+sub cmd_load {
+    usage() if @ARGV < 1;
+    my $batch = argv2batch(@ARGV);
+    my $staged_batch = find_staged_batch($batch);
+    if ($staged_batch) {
+        load_staged_batch($staged_batch);
+    }
+    else {
+        load_unstaged_batch($batch);
+    }
+}
+
+sub cmd_match {
+    usage() if @ARGV < 1;
+    my $batch = argv2batch(@ARGV);
+    match_batch($batch);
+}
+
+# --- Functions
+
+sub match_batch {
+    my ($batch) = @_;
+    my ($file_name, $matcher_id, $marc_flavor, $char_encoding, $record_type)
+        = @$batch{qw(file_name matcher_id marc_flavor char_encoding record_type)};
+    my $matcher = $matcher_id
+        ? ( C4::Matcher->fetch($matcher_id) || fatal("no such matcher: $matcher_id") )
+        : usage('no matcher specified');
+    my $n = 0;
+    marciter {
+        my ($marcref) = @_;
+        $n++;
+        1;
+        print $$marcref;
+    } $file_name;
+}
+
+sub stage_batch {
+    my ($batch) = @_;
+    my ($file_name, $matcher_id, $marc_flavor, $char_encoding, $record_type)
+        = @$batch{qw(file_name matcher_id marc_flavor char_encoding record_type)};
+    my $matcher = $matcher_id
+        ? ( C4::Matcher->fetch($matcher_id) || fatal("no such matcher: $matcher_id") )
+        : undef;
+    my $count = marccount($file_name);
+    fatal("no records to stage") if $count == 0;
+    my $batch_id = AddImportBatch($batch);
+    my $n = 0;
+    marciter {
+        my ($marcref) = @_;
+        $n++;
+        my $update_counts = ($n == $count);
+        my ($marc_record, $charset_guessed, $char_errors) = MarcToUTF8Record($$marcref, $marc_flavor, $char_encoding);
+        SetUTF8Flag($marc_record);
+        if ($record_type eq 'biblio') {
+            my $import_record_id = AddBiblioToBatch($batch_id, $n, $marc_record, $char_encoding, int(rand 99999), $update_counts);
+            if ($batch->{'item_action'} ne 'ignore') {
+                AddItemsToImportBiblio($batch_id, $import_record_id, $marc_record, $update_counts);
+            }
+        }
+        elsif ($record_type eq 'auth') {
+            my $import_record_id = AddAuthToBatch($batch_id, $n, $marc_record, $char_encoding, int(rand 99999), $update_counts, $marc_flavor);
+        }
+    } $file_name;
+    if ($matcher) {
+        my $nmatches = BatchFindDuplicates($batch_id, $matcher);
+        print STDERR "matched: $nmatches record(s)\n" if -t STDERR;
+    }
+    SetImportBatchStatus($batch_id, 'staged');
+    print STDERR "staged: batch $batch_id ($n records)\n" if -t STDERR;
+}
+
+sub load_staged_batch {
+    my ($staged_batch) = @_;
+    my $batch_id = $staged_batch->{'import_batch_id'};
+    my $framework = '';
+    my ($num_added, $num_updated, $num_items_added, $num_items_replaced, $num_items_errored, $num_ignored) =
+        BatchCommitRecords($batch_id, $framework);
+    1;
+}
+
+sub load_unstaged_batch {
+    my ($batch) = @_;
+    my $framework = '';
+    my $n = 0;
+    marciter {
+        my ($marcref) = @_;
+        $n++;
+        my $update_counts = ($n == $count);
+        my ($marc_record, $charset_guessed, $char_errors) = MarcToUTF8Record($$marcref, $marc_flavor, $char_encoding);
+        SetUTF8Flag($marc_record);
+        if ($record_type eq 'biblio') {
+            my ($biblionumber, $biblioitemnumber);
+            if ($batch->{'item_action'} eq 'ignore') {
+                ($biblionumber, $biblioitemnumber) = AddBiblio($marc_record, $framework);
+            }
+            else {
+                ($biblionumber, $biblioitemnumber) = AddBiblio($marc_record, $framework, {'defer_marc_save' => 1});
+                my ($itemnumbers, $errors) = AddItemBatchFromMarc($marc_record, $biblionumber, $biblioitemnumber, '' );
+                C4::Biblio::_strip_item_fields($marc_record, '');
+                ModBiblioMarc($marc_record, $biblionumber, $framework);
+            }
+        }
+    } $file_name;
+}
+
+sub marccount {
+    my ($f) = @_;
+    my $n = 0;
+    marciter { $n++ } $f;
+    return $n;
+}
+
+sub marciter(&$) {
+    my ($code, $f) = @_;
+    my $fh;
+    if (ref $f) {
+        $fh = $f;
+    }
+    else {
+        open $fh, '<', $f or die "open $f: $!";
+    }
+    local $/ = "\x1d";
+    while (defined(my $marc = <$fh>)) {
+        $code->(\$marc);
+    }
+    close $fh or die "close $f: $!";
+}
+
+sub argv2batch {
+    my %batch = (
+        'purpose'        => 'add',
+        'record_type'    => 'biblio',
+        'description'    => undef,
+        'marc_flavor'    => 'MARC21',
+        'char_encoding'  => 'UTF-8',
+        'import_status'  => 'staging',
+        'batch_type'     => 'batch',
+        'item_action'    => 'always_add',
+        # Determined from purpose
+        # 'overlay_action' => 'create_new',
+        # 'nomatch_action' => 'create_new',
+    );
+    foreach (@_) {
+        usage("unrecognized parameter: $_") if !/^([-\w]+)=(.*)$/;
+        my ($k, $v) = ($1, $2);
+        $k =~ tr/-/_/;
+        $batch{$k} = $v;
+    }
+    usage("unknown record type: $batch{record_type}")
+        if $batch{record_type} !~ /^(biblio|auth)$/;
+    $batch{'comments'} = delete $batch{'description'};
+    $batch{'file_name'} = delete $batch{'file'}
+        or usage("MARC file not specified");
+    my $purpose = $batch{'purpose'};
+    if ($purpose eq 'add') {
+        $batch{'overlay_action'} = 'ignore';
+        $batch{'nomatch_action'} = 'create_new';
+    }
+    elsif ($purpose eq 'replace') {
+        $batch{'overlay_action'} = 'replace';
+        $batch{'nomatch_action'} = 'ignore';
+    }
+    elsif ($purpose eq 'delete') {
+        fatal("deletes not yet implemented");
+    }
+    else {
+        usage("unrecognized record load purpose $purpose");
+    }
+  # foreach (qw(project update batch)) {
+  #     fatal("no $_ specified") if !defined $batch{$_};
+  # }
+    if ($batch{'match_by'}) {
+        $batch{'matcher_id'} = C4::Matcher::GetMatcherId($batch{'match_by'})
+            or fatal("no such matcher: $batch{'match_by'}");
+    }
+    return \%batch;
+}
+
+sub _update_batch_record_counts {
+    my ($batch_id) = @_;
+
+    my $dbh = C4::Context->dbh;
+    my $sth = $dbh->prepare_cached("UPDATE import_batches SET
+                                        num_records = (
+                                            SELECT COUNT(*)
+                                            FROM import_records
+                                            WHERE import_batch_id = import_batches.import_batch_id),
+                                        num_items = (
+                                            SELECT COUNT(*)
+                                            FROM import_records
+                                            JOIN import_items USING (import_record_id)
+                                            WHERE import_batch_id = import_batches.import_batch_id
+                                            AND record_type = 'biblio')
+                                    WHERE import_batch_id = ?");
+    $sth->bind_param(1, $batch_id);
+    $sth->execute();
+    $sth->finish();
+}
+
+sub find_staged_batch {
+    my ($batch) = @_;
+    my $j = $batch->{'job'} or return;
+    my @all_batches = @{ GetAllImportBatches() };
+    my ($staged_batch, @etc) = grep {
+        $_->{'batch_type'} eq 'batch'
+        &&
+        $_->{'import_status'} eq 'staged'
+        &&
+        $_->{'file_name'} eq $batch->{'file_name'}
+        #$_->{'file_name'} =~ m{(^|/)$j([/.]|$)}
+    } @all_batches;
+    fatal("multiple batches staged for $batch->{'file_name'}") if @etc;
+    return $staged_batch;
+### my $file_name = "%/$j/records.mrc";
+### my $dbh = C4::Context->dbh;
+### my $sth = $dbh->prepare_cached("SELECT * FROM import_batches WHERE import_status = 'staged' AND file_name LIKE ?");
+### $sth->bind_param(1, $file_name);
+### $sth->execute;
+### my $result = $sth->fetchrow_hashref;
+### $sth->finish;
+### return $result;
+}
+
+sub usage {
+    print STDERR "$prog: $_\n" for @_;
+    print STDERR "usage: $prog KEY=VAL...\n";
+    exit 1;
+}

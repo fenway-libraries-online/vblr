@@ -1,3 +1,7 @@
 old
 ARCHIVING
 vblrget
+*~
+*.bak
+*.swp
+*.swo

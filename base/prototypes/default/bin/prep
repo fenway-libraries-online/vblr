@@ -1,0 +1,60 @@
+#!/bin/zsh
+
+typeset -a recode addfields add33x mkmfhd mk856
+
+main() {
+    # Build the commands that we'll use to prep records
+    config
+    # And run them in a pipeline
+    $recode          |  # E.g., MARC8 to UTF-8
+    marcftidy -Ed    |  # Strip empty or malformed fields
+    marc-make-035    |  # For matching
+    $addfields       |  # Add some fields...
+    $add33x          |  #   ...including 33x fields...
+    marcgroom -0 -8  |  #   ...and put them where they belong
+    $mkmfhd          |  # Build MFHD...
+    $mk856              #   ...and its 856 field
+}
+
+config() {
+    # Read vblr config values
+    typeset penc=$(    vblr conf prep.marc-encoding )
+    typeset lenc=$(    vblr conf load.marc-encoding )
+    typeset loc=$(     vblr conf prep.location      )
+    typeset ven="$(    vblr conf prep.vendor        )"
+    typeset oclc=$(    vblr conf prep.oclc-symbol   )
+    typeset proxy=$(   vblr conf prep.proxy-prefix  )
+    typeset note="$(   vblr conf prep.note          )"
+    typeset arg33x="$( vblr conf prep.33x-codes     )"
+    # Build the command to recode (default: to UTF-8)
+    : ${lenc:=utf8}
+    if [[ $penc == utf8 && $lenc == utf8 ]]; then
+        recode=( marcutf8 -u )
+    else
+        recode=( marccode -f $penc -t $lenc -c -E )
+    fi
+    # Build the commands to add fields
+    [[ -n $oclc ]] && addfields+=( marcappend 049 [ -a $oclc ] ) || addfields=( cat )
+    if [[ $arg33x == *! ]]; then
+        add33x=( marc33x -A ${arg33x[1,-2]} )
+    elif [[ -n $arg33x ]]; then
+        add33x=( marc33x -a $arg33x )
+    elif [[ -e conf/rda.rules ]]; then
+        add33x=( marc33x -r conf/rda.rules )
+    else
+        add33x=( marc33x )
+    fi
+
+    # Build the command to make a MFHD and move the 856 field to it
+    mkmfhd=( marcspawn -18 -20 -b $loc -h $ven )
+    if [[ -z $note && -z $proxy ]]; then
+        mk856=( cat )
+    else
+        mkmfhd+=( -k 856 )
+        mk856=( marc-devolve-856 -E )
+        [[ -z $note  ]] || mk856+=( -Z $note )
+        [[ -z $proxy ]] || mk856+=( -p "${proxy}%s" )
+    fi
+}
+
+main "$@"
