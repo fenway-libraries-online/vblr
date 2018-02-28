@@ -196,6 +196,13 @@ GetOptions(
     'p|project=s' => \$pdir,
 ) or usage_commands;
 
+if (-r "$root/conf/env.kv") {
+    my $env = rdkvfile("$root/conf/env.kv");
+    while (my ($k, $v) = each %$env) {
+        $ENV{$k} = expand_env($v);
+    }
+}
+
 my %skip_orient = map { $_ => 1 } qw( init help version projects group groups www iddb which shell );
 my %iddb;
 
@@ -5238,6 +5245,12 @@ sub rmrf {
 
 sub tar {
     system('tar', @_) == 0;
+}
+
+sub expand_env {
+    local $_ = shift;
+    s{\$([A-Z0-9_]+)|\${([A-Z0-9_]+)}}{$ENV{$1 // $2} // ''}eg;
+    return $_;
 }
 
 # vim:set nu:
