@@ -9,19 +9,36 @@ sub fatal;
 sub usage;
 sub note;
 
-usage if @ARGV != 1;
-
-my $ils = lc shift @ARGV;
-$ils =~ /^(voyager|koha)$/ or fatal "unsupported ILS: $ils";
-
 my ($perl, $self) = ($^X, $0);
 my $interactive = -t STDIN;
+
+my ($ils, $user, $root) = @ARGV;
+
+$ils =~ /^(voyager|koha)$/ or fatal "unsupported ILS: $ils";
+
+if (!defined $user) {
+    my ($name, undef, undef, undef, undef, undef, undef, $dir) = getpwuid($<);
+    fatal "can't find home directory" if !defined $dir;
+    fatal "no home directory" if !-d $dir;
+    ($user, $root) = ($name, "$dir/proj");
+}
+elsif (!defined $root) {
+    my ($name, undef, undef, undef, undef, undef, undef, $dir) = getpwnam($user);
+    fatal "no such user: $user" if !defined $dir;
+    fatal "no home directory for user: $user" if !-d $dir;
+    $root = "$dir/proj";
+}
+my @passwd = getpwnam($user);
+fatal "no such user: $user" if !@passwd;
+my $group = getgrgid($passwd[3]);
+fatal "no group for user: $user" if !$group;
+
 my ($lib, $bin, $man) = @Config{qw(sitelib sitebin siteman1dir)};
 
 check_permissions();
 install_prereqs();
 install_vblr();
-create_files($ils);
+create_files($ils, $root);
 
 # --- Functions
 
@@ -67,10 +84,12 @@ sub install_vblr {
 }
 
 sub create_files {
-    xmkdir('~/proj');
+    my ($ils, $root) = @_;
+    xmkdir($root);
     foreach ('base', $ils) {
-        run('rsync', -qav => "$_/", glob('~/proj/'));
+        run('rsync', -qav => "$_/", "$root/");
     }
+    run('chown', '-R', "$user.$group", $root);
 }
 
 sub xmkdir {
@@ -94,3 +113,7 @@ sub fatal {
     exit 2;
 }
 
+sub usage {
+    print STDERR "usage: install.pl ILS [USER]\n";
+    exit 1;
+}
