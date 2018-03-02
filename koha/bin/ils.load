@@ -5,6 +5,7 @@ use warnings;
 
 use MARC::File::USMARC;
 use File::Kvpar;
+use Digest::MD5 qw(md5_hex);
 use POSIX qw(strftime);
 
 use C4::Context;
@@ -51,10 +52,6 @@ sub cmd_match {
     usage() if @ARGV < 1;
     my $batch = argv2batch(@ARGV);
     match_batch($batch);
-}
-
-sub cmd_add_items {
-    my $batch = argv2hash(@ARGV);
 }
 
 sub cmd_results {
@@ -442,6 +439,13 @@ sub open_batch_file {
     return wantarray ? ($fh, $file) : $fh;
 }
 
+sub make_barcode {
+    my ($batch, $item_number) = @_;
+    my ($p, $u, $b) = @$batch{qw(project update batch)};
+    my $md5 = md5_hex(join ':', $p, $u, $b, $item_number);
+    return substr('k#'.$md5, 0, 20);
+}
+
 sub usage {
     print STDERR "$prog: $_\n" for @_;
     print STDERR "usage: $prog KEY=VAL...\n";
@@ -452,3 +456,4 @@ sub fatal {
     print STDERR "ils.load: @_\n";
     exit 2;
 }
+
