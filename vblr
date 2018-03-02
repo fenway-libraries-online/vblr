@@ -47,9 +47,10 @@ my %purpose2human = (
 use constant AUTHORITY => 'auth';
 use constant BIB => 'bib';
 use constant MFHD => 'mfhd';
+use constant ITEM => 'item';
 use constant BIBMFHD => 'bib+mfhd';
 
-my %abbrev2rectype = (A => AUTHORITY, B => BIB, M => MFHD);
+my %abbrev2rectype = (A => AUTHORITY, B => BIB, M => MFHD, I => ITEM);
 my %rectype2human  = (
     AUTHORITY() => 'authority record(s)',
     BIB() => 'bib record(s)',
@@ -203,7 +204,7 @@ if (-r "$root/conf/env.kv") {
     }
 }
 
-my %skip_orient = map { $_ => 1 } qw( init help version projects group groups www iddb which shell );
+my %skip_orient = map { $_ => 1 } qw( init help version root projects group groups www iddb which shell );
 my %iddb;
 
 @ARGV = qw(shell) if !@ARGV;
@@ -1638,7 +1639,7 @@ sub cmd_match {
             }
         }
     );
-    fatal "Can't run ils.profile", @$out if $err != 0;
+    fatal "Can't run ils.match", @$out if $err != 0;
 }
 
 sub cmd_www {
@@ -2588,40 +2589,27 @@ sub run {
     my $env  = $arg{'env'};
     my $code = $arg{'code'};
     local %ENV = (%ENV, %{ $env || {} });;
-    $cmd = which($cmd)
-        or fatal "can't find script $cmd";
-    my @where = ($root);
-    my ($p, $u, $b, $j) = @arg{qw(project update batch job)};
-    if (defined $p) {
-        my $this_pdir = pdir($p);
-        push @where, $this_pdir;
-        if (defined $u) {
-            push @where, my $udir = "$this_pdir/updates/$u";
-            push @where, "$udir/batches/$b"         if defined $b;
-            push @where, "$udir/batches/$b/jobs/$j" if defined $j;
-        }
+    if ($cmd !~ m{/}) {
+        $cmd = which($cmd)
+            or fatal "can't find script $cmd";
     }
-    my $f = find("bin/$cmd", reverse @where);
-    if (defined $f && -x $f) {
-        while (my ($k, $v) = each %arg) {
-            delete $ENV{'VBLR_'.uc($k)};
-            $ENV{'VBLR_'.uc($k)} = $v if defined $v;
+    if ($ENV{'VBLR_FORCE_PERL_DEBUG'} && system("fgrep -q /bin/perl $cmd") == 0) {
+        unshift @$args, ('-d', $cmd);
+        $cmd = 'perl';
+    }
+    open my $fh, '-|', $cmd, @$args or return ($!, []);
+    if ($code) {
+        local $_;
+        while (<$fh>) {
+            $code->();
         }
-        my @args = kvparams(%arg);
-        open my $fh, '-|', $f, @args or return ($!, []);
-        if ($code) {
-            local $_;
-            while (<$fh>) {
-                $code->();
-            }
-            close $fh or return ($!);
-            return (0);
-        }
-        else {
-            my @out = <$fh>;
-            close $fh or return ($!, \@out);
-            return (0, \@out);
-        }
+        close $fh or return ($!);
+        return (0);
+    }
+    else {
+        my @out = <$fh>;
+        close $fh or return ($!, \@out);
+        return (0, \@out);
     }
 }
 
@@ -2712,7 +2700,7 @@ sub load_batch {
     else {
         $arg{'profile'} = $profile;
     }
-    my @cmd = ('load', map { sprintf("%s=%s", $_, $arg{$_}) } sort keys %arg);
+    my @cmd = ('ils.load', map { sprintf("%s=%s", $_, $arg{$_}) } sort keys %arg);
     if ($opt{'dry_run'}) {
         print STDERR join(' ', 'command:', @cmd), "\n";
         return;
@@ -4227,7 +4215,6 @@ sub copy_bin {
 
 sub load_results {
     my ($logfile) = @_;
-    open my $fh, '-|', 'vbilog', $logfile or fatal "Can't run vbilog: $!";
     my @results;
     my %abbrev2action = qw(
         add add
@@ -4239,31 +4226,32 @@ sub load_results {
         unm unmatched
         unr unresolved
     );
-    my %abbrev2rectype = qw( A auth B bib M mfhd );
     my $num = 0;
     my $head = 0;
-    while (<$fh>) {
-        chomp;
-        if (/^(\d+)$/) {
-            $num = $1;
-            $head = 1;
-        }
-        elsif (s/^([A-Z]) (\w+)\s*//) {
-            my $rectype = $abbrev2rectype{$1} || $1;
-            my $action  = $abbrev2action{$2}  || $2;
-            next if $rectype eq 'M';
-            my @records = split / /;
-            push @results, {
-                'number'  => $num,
-                'type'    => $rectype,
-                'head'    => $head,
-                'action'  => $action,
-                'records' => \@records,
-            };
-            $head = 0;
-        }
-    }
-    close $fh;
+    run('ils.results',
+        'args' => ["log=$logfile"],
+        'code' => sub {
+            chomp;
+            if (/^(\d+)$/) {
+                $num = $1;
+                $head = 1;
+            }
+            elsif (s/^([A-Z]) (\w+)\s*//) {
+                my $rectype = $abbrev2rectype{$1} || $1;
+                my $action  = $abbrev2action{$2}  || $2;
+                next if $rectype eq 'M';
+                my @records = split / /;
+                push @results, {
+                    'number'  => $num,
+                    'type'    => $rectype,
+                    'head'    => $head,
+                    'action'  => $action,
+                    'records' => \@records,
+                };
+                $head = 0;
+            }
+        },
+    );
     return @results;
 }
 
@@ -4573,6 +4561,10 @@ sub cmd_edit {
         next if sha1_hex(rdfile($_)) ne $sum{$_};
         print STDERR "no changes: $_\n";
     }
+}
+
+sub cmd_root {
+    print $root, "\n";
 }
 
 # --- Shell(-only) commands
