@@ -307,8 +307,16 @@ sub load_items {
             add_items_from_flokb($batch);
         }
     }
+    elsif ($purpose eq 'delete') {
+        if ($format eq 'MARC21') {
+            delete_items_from_marc($batch);
+        }
+        elsif ($format eq 'flokb') {
+            delete_items_from_flokb($batch);
+        }
+    }
     else {
-        fatal "deleting or replacing items not yet implemented";
+        fatal "replacing items not yet implemented";
     }
 }
 
@@ -388,6 +396,58 @@ sub add_items_from_flokb {
     );
 }
 
+sub delete_items_from_marc {
+    fatal "deleting items not yet implemented";
+    my ($batch) = @_;
+    my $file = $batch->{'file_name'};
+    my $marc_batch = MARC::Batch->new('USMARC', $file);
+    my $n = 0;
+    my $fhlog = open_log_file($batch, '>');
+    while (my $record = $marc_batch->next) {
+        $n++;
+        print $fhlog $n, "\n";
+        my $ok;
+        eval {
+            my @items_to_delete = map { field2item($_) } $record->field('952');
+            next if !@items_to_delete;
+            my (%items_to_delete_by_branch, %kohabybranch);
+            foreach my $item (@items_to_delete) {
+                my $branch = $item->{'homebranch'};
+                push @{ $items_to_delete_by_branch{$branch} ||= [] }, $field;
+            }
+            my $biblionumber = marc_record_biblionumber($record)
+                or fatal "no biblionumber";
+            print $fhlog "B mat $biblionumber\n";
+            my @items_in_koha = biblio_items($biblionumber);
+            foreach my $item (@items_in_koha) {
+                my $branch = $item->{'homebranch'};
+                push @{ $kohabybranch{$branch} ||= [] }, $item;
+            }
+            my @itemnumbers_deleted;
+            1;
+            print $fhlog map { "I del $_\n" } @itemnumbers_deleted;
+            $ok = 1;
+        };
+        if (my @warnings = $marc_batch->warnings) {
+            print STDERR "$prog: delete items: warning: file $file record $n:\n";
+            print STDERR map { "| $_\n" } @warnings;
+        }
+        if (!$ok) {
+            my @errlines = split /\n/, $@;
+            print STDERR "$prog: delete items: error: file $file record $n:\n";
+            print STDERR map { "| $_\n" } @errlines;
+            print $fhlog "E err $errlines[0]\n";
+        }
+        print $fhlog "\n";
+    }
+    my $fhjob = open_job_file($batch, '>');
+    print $fhjob job_info(
+        'job' => $batch->{'job'},
+        'file' => $file,
+        'profile' => $batch->{'profile'},
+    );
+}
+
 sub marc_record_biblionumber {
     my ($record) = @_;
     my ($bnum) = $record->subfield('999', 'c');
@@ -444,6 +504,25 @@ sub make_barcode {
     my ($p, $u, $b) = @$batch{qw(project update batch)};
     my $md5 = md5_hex(join ':', $p, $u, $b, $item_number);
     return substr('k#'.$md5, 0, 20);
+}
+
+sub field2item {
+    my ($field) = @_;
+    my %mapping = qw(
+        8 ccode
+        a homebranch
+        b holdingbranch
+        c location
+        o itemcallnumber
+        p barcode
+        u uri
+        y itype
+        z itemnotes
+    );  # ... 0 withdrawn 1 itemlost 2 cn_source 3 materials 4 damaged ...
+    my %item = map {
+        $mapping{$_} => $field->subfield($_)
+    } sort keys %mapping;
+    return \%item;
 }
 
 sub usage {
