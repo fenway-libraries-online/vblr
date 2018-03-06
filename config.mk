@@ -1,2 +1,2 @@
-PREFIX = /usr/local
-VBLR_ROOT = /var/local/koha/koha
+PREFIX = /site
+VBLR_ROOT = /site/marc/helm/proj
