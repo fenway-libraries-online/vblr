@@ -70,11 +70,25 @@ sub match_batch {
         ? ( C4::Matcher->fetch($matcher_id) || fatal "no such matcher: $matcher_id" )
         : usage('no matcher specified');
     my $n = 0;
+    my $max_matches = $batch->{'max_matches'} || 3;
     marciter {
         my ($marcref) = @_;
         $n++;
-        1;
-        print $$marcref;
+        my $marc_record = MARC::Record->new_from_usmarc($$marcref);
+        my @matches = $matcher->get_matches($marc_record, $max_matches);
+        if (@matches) {
+            my @fields;
+            $marc_record->delete_fields('999');
+            foreach (@matches) {
+                my $field = MARC::Field->new('999', '', '', 'c' => $_);
+                push @fields, $field;
+            }
+            $marc_record->append_fields(@fields);
+            print $marc_record->as_usmarc;
+        }
+        else {
+            print $$marcref;
+        }
     } $file_name;
 }
 
@@ -259,7 +273,9 @@ sub _apply_profile {
         next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
         /^(\S+) (.*)$/
             or fatal "invalid line in profile $profile: $_";
-        $batch->{$1} = $2;
+        my ($k, $v) = ($1, $2);
+        $k =~ tr/-/_/;
+        $batch->{$k} = $v;
     }
     return $batch;
 }
@@ -413,7 +429,7 @@ sub delete_items_from_marc {
             my (%items_to_delete_by_branch, %kohabybranch);
             foreach my $item (@items_to_delete) {
                 my $branch = $item->{'homebranch'};
-                push @{ $items_to_delete_by_branch{$branch} ||= [] }, $field;
+                push @{ $items_to_delete_by_branch{$branch} ||= [] }, $item;
             }
             my $biblionumber = marc_record_biblionumber($record)
                 or fatal "no biblionumber";
