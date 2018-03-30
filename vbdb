@@ -30,6 +30,21 @@ $sub->();
 
 # --- Command handlers
 
+sub cmd_add_project {
+    orient();
+    my $g = $env{'group'};
+    my $p = $env{'project'} or fatal "no project specified";
+    !$project or fatal "project $p already exists";
+    if (!$g) {
+        ($g = $p) =~ s{/.+}{};
+        $group = group($g);
+    }
+    db_transact {
+        $project = db_insert_project();
+    };
+    print STDERR "project added: $p\n";
+}
+
 sub cmd_add_file {
     orient();
     my $f = $env{'file'} or fatal "no file specified";
@@ -85,6 +100,32 @@ sub db_transact(&) {
     my $errstr = $dbh->errstr;
     $dbh->rollback;
     fatal "transaction failed: $errstr";
+}
+
+sub db_insert_project {
+    my $p = $env{'project'};
+    my $phash = kvread("$root/$p/project.kv");
+    my $pcode = $phash->{'id'};
+    my $descrip = $phash->{'description'} // '';
+    my $freq = $phash->{'frequency'};
+    my $ongoing = $freq =~ /^one-?time$/ ? 0 : 1;
+    (my $code = $p) =~ s{.+/}{};
+    (my $status = glob "$root/$p/\@*") =~ s{.+[@]}{};
+    my $group_id = group_id($group);
+    my $sql = 'INSERT INTO projects (code, pcode, status, description, ongoing, frequency, group_id) VALUES (?, ?, ?, ?)';
+    my $sth = $dbh->prepare($sql);
+    $sth->execute($code, $pcode, $status, $descrip, $ongoing, $freq, $group_id);
+    my $project_id = $sth->last_insert_id;
+    return $project{$p} = {
+        'id' => $project_id,
+        'code' => $code,
+        'pcode' => $pcode,
+        'status' => $status,
+        'description' => $descrip,
+        'ongoing' => $ongoing,
+        'frequency' => $freq,
+        'group_id' => $group_id,
+    };
 }
 
 sub db_insert_file {
@@ -296,6 +337,13 @@ sub record {
     return $record{$record->{'id'}} = $record;
 }
 
+sub group_id {
+    my ($g) = @_;
+    return $g->{'id'} if ref $g;
+    return $g if $g =~ /^[0-9]+$/;
+    return group($g)->{'id'};
+}
+
 sub project_id {
     my ($p) = @_;
     return $p->{'id'} if ref $p;
@@ -363,3 +411,17 @@ sub examine {
     }
     return ($n, $md5->hexdigest);
 }
+
+sub kvread {
+    my ($f) = @_;
+    open my $fh, '<', $f or fatal "open $f: $!";
+    my %hash;
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+        chomp;
+        /^(\S+)\s+(.*)$/ or fatal "unrecognized line in $f: $_";
+        $hash{$1} = $2;
+    }
+    return \%hash;
+}
+
