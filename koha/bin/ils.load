@@ -15,6 +15,20 @@ use C4::ImportBatch;
 use C4::Items;
 use C4::Matcher;
 
+sub C { (uc $_[0], $_[0]) }
+
+# Load purposes
+use constant C('add');
+use constant C('delete');
+#use constant C('replace');
+
+use constant C('create_new');
+use constant C('always_add');
+use constant C('add_only_for_matches');
+use constant C('add_only_for_new');
+use constant C('replace');
+use constant C('ignore');
+
 sub usage;
 sub fatal;
 sub marciter(&$);
@@ -94,8 +108,8 @@ sub match_batch {
 
 sub stage_batch {
     my ($batch) = @_;
-    my ($file_name, $matcher_id, $marc_flavor, $char_encoding, $record_type)
-        = @$batch{qw(file_name matcher_id marc_flavor char_encoding record_type)};
+    my ($file_name, $matcher_id, $marc_flavor, $char_encoding, $record_type, $item_action)
+        = @$batch{qw(file_name matcher_id marc_flavor char_encoding record_type item_action)};
     my $matcher = $matcher_id
         ? ( C4::Matcher->fetch($matcher_id) || fatal "no such matcher: $matcher_id" )
         : undef;
@@ -111,7 +125,7 @@ sub stage_batch {
         SetUTF8Flag($marc_record);
         if ($record_type eq 'biblio') {
             my $import_record_id = AddBiblioToBatch($batch_id, $n, $marc_record, $char_encoding, int(rand 99999), $update_counts);
-            if ($batch->{'item_action'} ne 'ignore') {
+            if ($item_action ne IGNORE) {
                 AddItemsToImportBiblio($batch_id, $import_record_id, $marc_record, $update_counts);
             }
         }
@@ -144,10 +158,14 @@ sub load_staged_batch {
 
 sub load_unstaged_batch {
     my ($batch) = @_;
-    my ($fhlog, $logfile) = open_log_file($batch, '>');
-    my $framework = '';
+    my ($fhlog, $logfile) = @$batch{qw(log log_file)} = open_log_file($batch, '>');
     my ($file_name, $matcher_id, $marc_flavor, $char_encoding, $record_type, $profile)
         = @$batch{qw(file_name matcher_id marc_flavor char_encoding record_type profile)};
+    my ($matcher, $max_matches);
+    if ($matcher_id) {
+        $matcher = C4::Matcher->fetch($matcher_id) or fatal "no such matcher: $matcher_id";
+        $max_matches = $batch->{'max_matches'} || 3;
+    }
     my $count = marccount($file_name);
     my $n = 0;
     print $fhlog <<"EOS";
@@ -162,18 +180,13 @@ EOS
         my $update_counts = ($n == $count);
         my ($marc_record, $charset_guessed, $char_errors) = MarcToUTF8Record($$marcref, $marc_flavor, $char_encoding);
         SetUTF8Flag($marc_record);
+        my @matches;
+        @matches = $matcher->get_matches($marc_record, $max_matches) if $matcher;
         if ($record_type eq 'biblio') {
-            my ($biblionumber, $biblioitemnumber, %opt);
-            $opt{'defer_marc_save'} = 1 if $batch->{'item_action'} ne 'ignore';
-            ($biblionumber, $biblioitemnumber) = AddBiblio($marc_record, $framework, \%opt);
-            print $fhlog "$n\nB add $biblionumber\n";
-            if ($batch->{'item_action'} ne 'ignore') {
-                my ($itemnumbers, $errors) = AddItemBatchFromMarc($marc_record, $biblionumber, $biblioitemnumber, '' );
-                C4::Biblio::_strip_item_fields($marc_record, '');
-                ModBiblioMarc($marc_record, $biblionumber, $framework);
-                print $fhlog "I add $_\n" for @$itemnumbers;
-            }
-            print $fhlog "\n";
+            load_biblio($marc_record, $batch, $n, @matches);
+        }
+        else {
+            fatal "only bib loading is implemented";
         }
     } $file_name;
     my $fhjob = open_job_file($batch, '>');
@@ -182,6 +195,84 @@ EOS
         'file' => $file_name,
         'profile' => $profile,
     );
+}
+
+sub load_biblio {
+    my ($marc_record, $batch, $n, @matches) = @_;
+    my ($biblionumber, $biblioitemnumber, %opt);
+    my ($fhlog, $logfile, $item_action) = @$batch{qw(log log_file item_action)};
+    $opt{'defer_marc_save'} = 1 if $item_action ne IGNORE;
+    my $framework = $batch->{'framework'} || '';
+    # Figure out what to do with the bib
+    my $bib_action;
+    if (@matches > 1) {
+        # XXX Decide what to do
+        my $foo = $batch->{'resolve_multiple_matches'};
+        if ($foo =~ /^(no|off|0|false)$/i) {
+            print $fhlog "$n\nB unr @matches\n";
+        }
+        elsif ($foo =~ /^low/i) {
+            ($biblionumber) = (sort { $a <=> $b } @matches)[0];
+            print $fhlog "$n\nB mat $biblionumber\n";
+        }
+        elsif ($foo =~ /^high/i) {
+            ($biblionumber) = (sort { $b <=> $a } @matches)[0];
+            print $fhlog "$n\nB mat $biblionumber\n";
+        }
+        if ($biblionumber) {
+            $biblioitemnumber = GetBiblioItemByBiblioNumber($biblionumber);
+            $bib_action = $batch->{'overlay_action'};
+        }
+        else {
+            $bib_action = $batch->{'nomatch_action'};
+        }
+    }
+    elsif (@matches == 1) {
+        ($biblionumber) = @matches;
+        $biblioitemnumber = GetBiblioItemByBiblioNumber($biblionumber);
+        print $fhlog "$n\nB mat $biblionumber\n";
+        $bib_action = $batch->{'overlay_action'};
+    }
+    elsif ($batch->{'nomatch_action'} eq IGNORE) {
+        print $fhlog "$n\nB unm $biblionumber\n";
+        $bib_action = IGNORE;
+    }
+    else {
+        $bib_action = ADD;
+    }
+    # Do it!
+    if ($bib_action eq ADD) {
+        if ($item_action eq IGNORE) {
+            C4::Biblio::_strip_item_fields($marc_record, '');
+            ($biblionumber, $biblioitemnumber) = AddBiblio($marc_record, $framework, \%opt);
+            print $fhlog "$n\nB add $biblionumber\n";
+        }
+        else {
+            ($biblionumber, $biblioitemnumber) = AddBiblio($marc_record, $framework, \%opt);
+            my ($itemnumbers, $errors) = AddItemBatchFromMarc($marc_record, $biblionumber, $biblioitemnumber, '' );
+            C4::Biblio::_strip_item_fields($marc_record, '');
+            ModBiblioMarc($marc_record, $biblionumber, $framework);
+            print $fhlog "$n\nB add $biblionumber\n";
+            print $fhlog "I add $_\n" for @$itemnumbers;
+        }
+    }
+    elsif ($bib_action eq REPLACE) {
+        # XXX Is this right?
+        if ($item_action eq IGNORE) {
+            C4::Biblio::_strip_item_fields($marc_record, '');
+            ModBiblioMarc($marc_record, $biblionumber, $framework);
+        }
+        else {
+            my ($itemnumbers, $errors) = AddItemBatchFromMarc($marc_record, $biblionumber, $biblioitemnumber, '' );
+            C4::Biblio::_strip_item_fields($marc_record, '');
+            ModBiblioMarc($marc_record, $biblionumber, $framework);
+            print $fhlog "I add $_\n" for @$itemnumbers;
+        }
+    }
+    elsif ($bib_action eq DELETE) {
+        fatal "not implemented: delete";
+    }
+    print $fhlog "\n";
 }
 
 sub marccount {
@@ -197,6 +288,9 @@ sub marciter(&$) {
     if (ref $f) {
         $fh = $f;
     }
+    elsif ($f eq '-' || $f eq '/dev/stdin') {
+        $fh = \*STDIN;
+    }
     else {
         open $fh, '<', $f or fatal "open $f: $!";
     }
@@ -209,19 +303,19 @@ sub marciter(&$) {
 
 sub argv2batch {
     my %batch = (
-        'purpose'        => 'add',
+        'purpose'        => ADD,
         'record_type'    => 'biblio',
         'description'    => undef,
         'marc_flavor'    => 'MARC21',
         'char_encoding'  => 'UTF-8',
         'import_status'  => 'staging',
         'batch_type'     => 'batch',
-        'item_action'    => 'always_add',
+        'item_action'    => ALWAYS_ADD,
         'profile'        => 'default',
         %{ argv2hash(@_) },
         # Determined from purpose
-        # 'overlay_action' => 'create_new',
-        # 'nomatch_action' => 'create_new',
+        # 'overlay_action' => CREATE_NEW,
+        # 'nomatch_action' => CREATE_NEW,
     );
     usage("unknown record type: $batch{record_type}")
         if $batch{record_type} !~ /^(biblio|items|auth)$/;
@@ -229,21 +323,7 @@ sub argv2batch {
     $batch{'file_name'} = delete $batch{'file'}
         or usage("MARC file not specified");
     _apply_profile(\%batch);
-    my $purpose = $batch{'purpose'};
-    if ($purpose eq 'add') {
-        $batch{'overlay_action'} //= 'ignore';
-        $batch{'nomatch_action'} //= 'create_new';
-    }
-    elsif ($purpose eq 'replace') {
-        $batch{'overlay_action'} //= 'replace';
-        $batch{'nomatch_action'} //= 'ignore';
-    }
-    elsif ($purpose eq 'delete') {
-        fatal("deletes not yet implemented");
-    }
-    else {
-        usage("unrecognized record load purpose $purpose");
-    }
+    _normalize_actions(\%batch);
   # foreach (qw(project update batch)) {
   #     fatal("no $_ specified") if !defined $batch{$_};
   # }
@@ -252,6 +332,35 @@ sub argv2batch {
             or fatal("no such matcher: $batch{'match_by'}");
     }
     return \%batch;
+}
+
+sub _normalize_actions {
+    my ($batch) = @_;
+    my %ok = (
+        'overlay_action' => { map { $_ => 1 } CREATE_NEW, REPLACE, IGNORE },
+        'nomatch_action' => { map { $_ => 1 } CREATE_NEW, REPLACE },
+        'item_action' => { map { $_ => 1 } ALWAYS_ADD, ADD_ONLY_FOR_MATCHES, ADD_ONLY_FOR_NEW, REPLACE, IGNORE },
+    );
+    my $purpose = $batch->{'purpose'};
+    if ($purpose eq ADD) {
+        $batch->{'overlay_action'} //= IGNORE;
+        $batch->{'nomatch_action'} //= CREATE_NEW;
+    }
+    elsif ($purpose eq REPLACE) {
+        $batch->{'overlay_action'} //= REPLACE;
+        $batch->{'nomatch_action'} //= IGNORE;
+    }
+    elsif ($purpose eq DELETE) {
+        fatal("deletes not yet implemented");
+    }
+    else {
+        usage("unrecognized record load purpose $purpose");
+    }
+    foreach (qw(overlay_action nomatch_action item_action)) {
+        $batch->{$_} =~ tr/- /_/;
+        $ok{$batch->{$_}}
+            or fatal "invalid $_ in batch or profile: $batch->{$_}";
+    }
 }
 
 sub argv2hash {
@@ -315,7 +424,7 @@ sub load_items {
                 : fatal "unrecognized format: file $file";
     }
     my $purpose = $batch->{'purpose'};
-    if ($purpose eq 'add') {
+    if ($purpose eq ADD) {
         if ($format eq 'MARC21') {
             add_items_from_marc($batch);
         }
@@ -323,7 +432,7 @@ sub load_items {
             add_items_from_flokb($batch);
         }
     }
-    elsif ($purpose eq 'delete') {
+    elsif ($purpose eq DELETE) {
         if ($format eq 'MARC21') {
             delete_items_from_marc($batch);
         }
@@ -390,7 +499,7 @@ sub add_items_from_flokb {
         eval {
             my $biblionumber = delete $item->{'biblionumber'} or fatal "no biblionumber";
             my $action       = delete $item->{'action'};
-            next if defined $action && $action ne 'add';
+            next if defined $action && $action ne ADD;
             print $fhlog "B mat $biblionumber\n";
             my (undef, $biblioitemnumber, $itemnumber) = AddItem($item, $biblionumber, $dbh, '');
             print $fhlog "I add $itemnumber\n";
