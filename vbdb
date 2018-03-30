@@ -1,0 +1,365 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+sub usage;
+sub fatal;
+
+use DBI;
+use Digest;
+use Getopt::Long
+    qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
+
+sub db_transact(&);
+
+my $root = $ENV{'VBLR_ROOT'};
+my %env;
+my $dbh;
+my $trxlevel = 0;
+
+# Cached objects
+my ($group, $project, $update, $batch, $job, $file, $purpose);
+my (%group, %project, %update, %job, %file, %record, %load_results);
+
+@ARGV = qw(shell) if !@ARGV;
+my $cmd = shift @ARGV;
+$cmd =~ tr/-/_/;
+my $sub = __PACKAGE__->can("cmd_$cmd") || usage;
+$sub->();
+
+# --- Command handlers
+
+sub cmd_add_file {
+    orient();
+    my $f = $env{'file'} or fatal "no file specified";
+    -e $f or fatal "can't find file $f to add it";
+    db_transact {
+        $file = db_insert_file();
+        db_insert_records();
+    };
+    print STDERR "file added: $f\n";
+}
+
+sub cmd_add_update {
+    orient();
+    my $p = $env{'project'} or fatal "no project specified";
+    my $u = $env{'update'} or fatal "no update specified";
+    !defined $update or fatal "update $u already exists";
+    db_transact {
+        $update = db_insert_update();
+    };
+    print STDERR "update added: $u in $p\n";
+}
+
+sub cmd_add_job {
+    orient();
+    my $j = $env{'job'} or fatal "no job specified";
+    !defined $job or fatal "job $j already exists";
+    db_transact {
+        $job = db_insert_job();
+    };
+    print STDERR "job added: $j\n";
+}
+
+# --- Database functions
+
+sub db_begin {
+    $dbh->begin_work if !$trxlevel++;
+}
+
+sub db_end {
+    $dbh->commit if !--$trxlevel;
+}
+
+sub db_transact(&) {
+    my ($sub) = @_;
+    my $ok;
+    eval {
+        db_begin();
+        $sub->();
+        db_end();
+        $ok = 1;
+    };
+    return if $ok;
+    my $errstr = $dbh->errstr;
+    $dbh->rollback;
+    fatal "transaction failed: $errstr";
+}
+
+sub db_insert_file {
+    my ($f, $p) = @env{qw(file purpose)};
+    (my $name = $f) =~ s{.+/}{};
+    (my $dir  = $f) =~ s{/[^/]+$}{};
+    my ($count, $md5sum) = examine($f);
+    my $sql = 'INSERT INTO files (name, directory, num_records, purpose) VALUES (?, ?, ?, ?)';
+    my $sth = $dbh->prepare($sql);
+    $sth->execute($name, $dir, $count, $p);
+    my $file_id = $sth->last_insert_id;
+    return $file{$file_id} = {
+        'id' => $file_id,
+        'name' => $name,
+        'directory' => $dir,
+        'num_records' => $count,
+        'purpose' => $p,
+    };
+}
+
+sub db_insert_job {
+    my $sql = 'INSERT INTO jobs (jcode, first, last, file_id, update_id) VALUES (?, ?, ?, ?, ?)';
+    my $j = job_id($job);
+    my ($b, $e) = split /-/, ($env{'batch'} || die "job batch range not specified: $j");
+    my $f = $file->{'id'};
+    my $u = $update ? $update->{'id'} : undef;
+    my $sth = $dbh->prepare($sql);
+    $sth->execute($j, $b, $e, $f, $u);
+    my $id = $sth->last_insert_id;
+    return $job{$id} = {
+        'id' => $id,
+        'jcode' => $j,
+        'status' => 'new',
+        'first' => $b,
+        'last' => $e,
+        'file_id' => $f,
+        'update_id' => $u,
+    };
+}
+
+sub db_insert_update {
+    my $sql = 'INSERT INTO updates (code, purpose, project_id, file_id) VALUES (?, ?, ?, ?)';
+    my $sth = $dbh->prepare($sql);
+    $sth->execute($env{'update'}, $env{'purpose'}, project_id($project), file_id($env{'file'}));
+    my $update_id = $sth->last_insert_id;
+    return $update{$update_id} = {
+        'id' => $update_id,
+        'code' => $env{'update'},
+        'purpose' => $env{'purpose'},
+        'project' => $env{'project'},
+        'file' => $env{'file'},
+    };
+}
+
+sub db_insert_records {
+    my $f = sprintf '%s/%s', $file->{'directory'}, $file->{'name'};
+    open my $fh, '<', $f or fatal "open $f: $!";
+    my $n = 0;
+    local $/ = "\x1d";
+    while (defined (my $marc = <$fh>)) {
+        $n++;
+        1;
+    }
+}
+
+sub group {
+    my ($g) = @_;
+    return $g if ref $g;
+    my ($sql, @params);
+    if ($g =~ /^[0-9]+$/) {
+        return $group{$g} if $group{$g};
+        $sql = 'SELECT * FROM groups WHERE id = ?';
+        @params = ($g);
+    }
+    else {
+        $sql = 'SELECT * FROM groups WHERE code = ?';
+        @params = ($g);
+    }
+    my $sth = $dbh->prepare($sql);
+    $sth->execute(@params);
+    my ($group) = $sth->fetchrow_hashref;
+    $sth->finish;
+    die "no such group: $g" if !$group;
+    return $group{$group->{'id'}} = $group;
+}
+
+sub project {
+    my ($p) = @_;
+    return $p if ref $p;
+    my ($sql, @params);
+    if ($p =~ /^[0-9]+$/) {
+        return $project{$p} if $project{$p};
+        $sql = 'SELECT * FROM projects WHERE id = ?';
+        @params = ($p);
+    }
+    elsif ($p =~ m{^([^/]+)/([^/]+)$}) {
+        $sql = 'SELECT p.* FROM groups g, projects p WHERE g.id = p.group_id AND g.code = ? AND p.code = ?';
+        @params = ($1, $2);
+    }
+    elsif ($p =~ m{^p.{9}$}) {
+        $sql = 'SELECT * FROM projects WHERE pcode = ?';
+        @params = ($p);
+    }
+    my $sth = $dbh->prepare($sql);
+    $sth->execute(@params);
+    my ($project) = $sth->fetchrow_hashref;
+    $sth->finish;
+    die "no such project: $p" if !$project;
+    return $project{$project->{'id'}} = $project;
+}
+
+sub project_update {
+    my ($p, $u) = @_;
+    return $u if ref $u;
+    my ($sql, @params);
+    my $project = project($p)->{'id'};
+    $p = $project->{'id'};
+    if ($u =~ /^[0-9]+$/) {
+        return $update{$u} if $update{$u};
+        $sql = 'SELECT u.* FROM projects p, updates u, WHERE u.project_id = p.id AND p.id = ? AND u.id = ?';
+        @params = ($p, $u);
+    }
+    else {
+        $sql = 'SELECT u.* FROM projects p, updates u, WHERE u.project_id = p.id AND p.id = ? AND u.code = ?';
+        @params = ($p, $u);
+    }
+    my $sth = $dbh->prepare($sql);
+    $sth->execute(@params);
+    my ($update) = $sth->fetchrow_hashref;
+    $sth->finish;
+    die "no such update: $u (in project $project->{'code'})" if !$update;
+    return $update{$update->{'id'}} = $update;
+}
+
+sub job {
+    my ($j) = @_;
+    return $j if ref $j;
+    my ($sql, @params);
+    if ($j =~ /^[0-9]+$/) {
+        return $job{$j} if $job{$j};
+        $sql = 'SELECT * FROM jobs WHERE id = ?';
+        @params = ($j);
+    }
+    elsif ($j =~ /^j.{9}$/) {
+        $sql = 'SELECT * FROM jobs WHERE jcode = ?';
+        @params = ($j);
+    }
+    else { die }
+    my $sth = $dbh->prepare($sql);
+    $sth->execute(@params);
+    my ($job) = $sth->fetchrow_hashref;
+    $sth->finish;
+    die "no such job: $j" if !$job;
+    return $job{$job->{'id'}} = $job;
+}
+
+sub file {
+    my ($f) = @_;
+    return $f if ref $f;
+    my ($sql, @params);
+    if ($f =~ /^[0-9]+$/) {
+        return $file{$f} if $file{$f};
+        $sql = 'SELECT * FROM files WHERE id = ?';
+        @params = ($f);
+    }
+    elsif ($f =~ m{/}) {
+        $sql = 'SELECT * FROM files WHERE directory = ? AND name = ?';
+        @params = (dirname($f), basename($f));
+    }
+    else {
+        $sql = 'SELECT * FROM files WHERE name = ?';
+        @params = ($f);
+    }
+    my $sth = $dbh->prepare($sql);
+    $sth->execute(@params);
+    my $files = $sth->fetchall_arrayref({});
+    die "multiple files: $f" if @$files > 1;
+    my ($file) = @$files;
+    $file{$file->{'id'}} = $file;
+    return shift @$files;
+}
+
+sub record {
+    my ($r, $f) = @_;
+    return $r if defined $r;
+    my ($sql, @params);
+    if ($r =~ /^[0-9]+$/) {
+        if (defined $f) {
+            my $file = file_id($f);
+            $sql = 'SELECT * FROM records WHERE file_id = ? AND record_num = ?';
+            @params = ($file->{'id'});
+        }
+        else {
+            return $record{$r} if $record{$r};
+            $sql = 'SELECT * FROM records WHERE id = ?';
+            @params = ($r);
+        }
+    }
+    elsif ($r =~ /^oclc:([0-9]+)$/) {
+        $sql = 'SELECT * FROM records WHERE oclc_num = ?';
+        @params = ($1);
+    }
+    else { die }
+    my $sth = $dbh->prepare($sql);
+    $sth->execute(@params);
+    my ($record) = $sth->fetchrow_hashref;
+    $sth->finish;
+    die "no such record: $r (in file $f)" if !$record;
+    return $record{$record->{'id'}} = $record;
+}
+
+sub project_id {
+    my ($p) = @_;
+    return $p->{'id'} if ref $p;
+    return $p if $p =~ /^[0-9]+$/;
+    return project($p)->{'id'};
+}
+
+sub file_id {
+    my ($f) = @_;
+    return $f->{'id'} if ref $f;
+    return $f if $f =~ /^[0-9]+$/;
+    return file($f)->{'id'};
+}
+
+sub record_id {
+    my ($r, $f) = @_;
+    return $r->{'id'} if ref $r;
+    return $r if !defined $f && $r =~ /^[0-9]+$/;
+    return record($r)->{'id'};
+}
+
+# --- Other functions
+
+sub orient {
+    $root = $ENV{'VBLR_ROOT'};
+    my $dbfile = 'vbdb.sqlite3';
+    my @env_keys = qw(group project update batch job file purpose);
+    %env = map { $_ => $ENV{'VBLR_' . uc($_)} } @env_keys;
+    # Don't attempt to instantiate $file from $ENV{'VBLR_FILE'}
+    ($group, $project, $update, $batch, $job, undef, $purpose) = @env{@env_keys};
+    GetOptions(
+        # General
+        'r|root=s'    => \$root,
+        'd|db-file=s' => \$dbfile,
+        # Environment/context
+        'g|group=s'   => \$group,
+        'p|project=s' => \$project,
+        'u|update=s'  => \$update,
+        'b|batch=s'   => \$batch,
+        'j|job=s'     => \$job,
+        'P|purpose=s' => \$purpose,
+    ) or usage;
+    chdir($root) or fatal "chdir $root: $!";
+    $dbh = DBI->connect("dbi:SQLite:dbname=$dbfile", '', '', {
+        'FetchHashKeyName' => 'NAME_lc',
+    });
+    if ($project) {
+        ($group ||= $project) =~ s{/.+}{};
+        $group = eval { group($group) };
+        $project = eval { project($project) };
+        $update = eval { project_update($project, $update) } if $update;
+    }
+    $job = eval { job($job) } if $job;
+}
+
+sub examine {
+    my ($f) = @_;
+    open my $fh, '<', $f or fatal "open $f: $!";
+    my $md5 = Digest->new('MD5');
+    my $n = 0;
+    local $/ = "\x1d";
+    while (defined (my $marc = <$fh>)) {
+        $n++;
+        $md5->add($marc);
+    }
+    return ($n, $md5->hexdigest);
+}

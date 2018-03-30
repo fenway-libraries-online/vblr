@@ -17,3 +17,4 @@ install-for-voyager: install-vblr voyager/bin/ils.load
 install-vblr: vblr check
 	install -d $(PREFIX)/bin
 	install vblr $(PREFIX)/bin/
+	install vbdb $(PREFIX)/bin/
