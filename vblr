@@ -2396,7 +2396,7 @@ sub prepare_batch {
         local @ARGV = ($u, $b);
         cmd_mkhtml();
     }
-    run_hook('prepared', update => $u, batch => $b);
+    run_hook('prepared', update => $u, batch => $b, purpose => $purpose);
 }
 
 sub cmd_preview {
@@ -2981,7 +2981,7 @@ sub cmd_hook {
 
 sub run_hook {
     my ($hook, %arg) = @_;
-    my @where = ($pdir);
+    my @where = ($root, $pdir);
     my ($u, $b, $j) = @arg{qw(update batch job)};
     if (defined $u) {
         push @where, my $udir = "$pdir/updates/$u";
