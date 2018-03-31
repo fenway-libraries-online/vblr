@@ -102,8 +102,9 @@ sub cmd_add_load_results {
     $file ||= file($f);
     my $job_id = job_id($job);
     my $offset = 0;
-    if (defined $arg{'batch'})
-        $arg{'batch'} =~ /^([1-9][0-9]*)/ or fatal "unparseable batch: $arg{'batch'}";
+    if (defined $arg{'batch'}) {
+        $arg{'batch'} =~ /^([1-9][0-9]*)/
+            or fatal "unparseable batch: $arg{'batch'}";
         $offset = $1 - 1;
     }
     local $/ = '';
@@ -128,7 +129,7 @@ sub cmd_add_load_results {
                 $bnum = $2 if $1 ne 'unr';
             }
         }
-        $sth->execute($job_id, $r, $action, $inum);
+        $sth->execute($job_id, $r, $action, $bnum);
         # Commit every 1000 records
         if (($n % 1000) == 0) {
             db_end();
