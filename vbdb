@@ -205,13 +205,14 @@ sub db_insert_records {
     my $sql = 'INSERT INTO records (file_id, record_num, oclc_num) VALUES (?, ?, ?)';
     my $sth = $dbh->prepare($sql);
     open my $fh, '<', $f or fatal "open $f: $!";
+    my %want = map { $_ => 1 } qw(001 003 035);
     my $n = 0;
     my $md5 = Digest->new('MD5');
     local $/ = "\x1d";
     while (defined (my $marc = <$fh>)) {
         $n++;
         $md5->add($marc);
-        my ($leader, $fields) = marcparse(\$marc, 'only' => [qw(001 003 035)]);
+        my ($leader, $fields) = marcparse(\$marc, 'only' => \%want);
         my ($onum, @etc) = sort { $a <=> $b } oclc_numbers(@$fields);
         warning "multiple OCLC numbers in record $n\n" if @etc;
         $sth->execute($file_id, $n, $onum);
