@@ -85,10 +85,56 @@ sub cmd_add_job {
 
 sub cmd_add_load_results {
     my %arg = orient();
+    my %code2action = qw(
+        add A
+        rep R
+        del D
+        mat M
+        dis X
+        err E
+        unm N
+        unr U
+    );
     $project or fatal "not in a project";
     $update or fatal "not in an update";
+    $job or fatal "no job";
     my $f = $arg{'file'} or fatal "no file specified";
     $file ||= file($f);
+    my $job_id = job_id($job);
+    my $offset = 0;
+    if (defined $arg{'batch'})
+        $arg{'batch'} =~ /^([1-9][0-9]*)/ or fatal "unparseable batch: $arg{'batch'}";
+        $offset = $1 - 1;
+    }
+    local $/ = '';
+    my $log_header = <STDIN>;
+    my $sql = 'SELECT id, record_num FROM records WHERE file_id = ?';
+    my $sth = $dbh->prepare($sql);
+    my @rec_id;
+    while (my ($id, $n) = $sth->fetchrow_array) {
+        $rec_id[$n] = $id;
+    }
+    $sth->finish;
+    $sql = 'INSERT INTO load_results (job_id, record_id, action, ils_num) VALUES (?, ?, ?, ?)';
+    $sth = $dbh->prepare($sql);
+    while (<STDIN>) {
+        my ($n, @results) = split /\n/;
+        $n += $offset;
+        my $r = $rec_id[$n] or next;
+        my ($action, $bnum) = ('?', undef);
+        foreach (@results) {
+            if (/^B (...) ([0-9]+)$/) {
+                $action = $code2action{$1} ||= '?'.$1;
+                $bnum = $2 if $1 ne 'unr';
+            }
+        }
+        $sth->execute($job_id, $r, $action, $inum);
+        # Commit every 1000 records
+        if (($n % 1000) == 0) {
+            db_end();
+            db_begin();
+        }
+    }
 }
 
 # --- Database functions
@@ -216,14 +262,14 @@ sub db_insert_records {
         my ($onum, @etc) = sort { $a <=> $b } oclc_numbers(@$fields);
         warning "multiple OCLC numbers in record $n\n" if @etc;
         $sth->execute($file_id, $n, $onum);
-        # Commit every 100 records
-        if (($n % 100) == 0) {
+        # Commit every 1000 records
+        if (($n % 1000) == 0) {
             db_end();
             db_begin();
         }
     }
     $sth->finish;
-    $sql = 'UPDATE files SET num_records = ?, md5sum = ? WHERE file_id = ?';
+    $sql = 'UPDATE files SET num_records = ?, md5sum = ? WHERE id = ?';
     $sth = $dbh->prepare($sql);
     $sth->execute($n, $md5->hexdigest, $file_id);
     return $n;
