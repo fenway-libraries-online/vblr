@@ -48,6 +48,7 @@ CREATE TABLE jobs (
     id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
     jcode       VARCHAR NOT NULL,
     status      VARCHAR NOT NULL DEFAULT 'new',
+    created     INTEGER NOT NULL,  /* seconds since UNIX epoch */
     first       INTEGER NOT NULL,  /* range within */
     last        INTEGER NOT NULL,  /*  the update */
     update_id   INTEGER NOT NULL REFERENCES updates(id)
@@ -59,14 +60,3 @@ CREATE TABLE load_results (
     action      VARCHAR NULL,   /* A=added, R=replaced, D=deleted, M=matched, U=unresolved, etc. */
     ils_num     INTEGER NULL
 );
-
-/*
-CREATE TABLE batches (
-    id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
-    first       INTEGER NOT NULL,
-    last        INTEGER NOT NULL,
-    status      VARCHAR NOT NULL DEFAULT 'new',
-    created     INTEGER NOT NULL,
-    update_id   INTEGER NOT NULL REFERENCES updates(id)
-);
-*/

@@ -237,17 +237,19 @@ sub db_insert_file {
 
 sub db_insert_job {
     my %arg = @_;
-    my $sql = 'INSERT INTO jobs (jcode, first, last, file_id, update_id) VALUES (?, ?, ?, ?, ?)';
+    my $t = time;
+    my $sql = 'INSERT INTO jobs (jcode, created, first, last, file_id, update_id) VALUES (?, ?, ?, ?, ?, ?)';
     my $j = job_id($job);
     my ($b, $e) = split /-/, ($arg{'batch'} || die "job batch range not specified: $j");
     my $f = $file->{'id'};
     my $u = $update ? $update->{'id'} : undef;
     my $sth = $dbh->prepare($sql);
-    $sth->execute($j, $b, $e, $f, $u);
+    $sth->execute($j, $t, $b, $e, $f, $u);
     my $id = $dbh->last_insert_id('', '', '', '');
     return $job{$id} = {
         'id' => $id,
         'jcode' => $j,
+        'created' => $t,
         'status' => 'new',
         'first' => $b,
         'last' => $e,
