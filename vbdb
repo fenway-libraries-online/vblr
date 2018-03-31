@@ -85,7 +85,10 @@ sub cmd_add_job {
 }
 
 sub cmd_add_load_results {
-    my %arg = orient();
+    my ($index_file);
+    my %arg = orient(
+        'index-file=s' => \$index_file,
+    );
     my %code2action = qw(
         add A
         rep R
@@ -97,32 +100,55 @@ sub cmd_add_load_results {
         unr U
     );
     $project or fatal "not in a project";
-    $update or fatal "not in an update";
-    $job or fatal "no job";
+    $update  or fatal "not in an update";
+    $job     or fatal "no job";
     my $f = $arg{'file'} or fatal "no file specified";
     $file ||= file($f);
     my $job_id = job_id($job);
-    my $offset = 0;
+    # Figure out which part of the source file was loaded
+    my $start = 1;  # Index of the first record (1-based, not 0-based)
+    my %index;      # This maps record numbers within the load results
+                    #   (always 1..m) to record numbers within the source file
     if (defined $arg{'batch'}) {
-        $arg{'batch'} =~ /^([1-9][0-9]*)/
+        $arg{'batch'} =~ /^([1-9][0-9]*)-/
             or fatal "unparseable batch: $arg{'batch'}";
-        $offset = $1 - 1;
+        $start = $1;
     }
-    local $/ = '';
-    my $log_header = <STDIN>;
-    my $sql = 'SELECT id, record_num FROM records WHERE file_id = ?';
-    my $sth = $dbh->prepare($sql);
+    elsif (defined $index_file) {
+        open my $fh, '<', $index_file or die "open $index_file: $!";
+        undef $start;
+        while (<$fh>) {
+            # <record # in the load> WHITESPACE <record # in the source file>
+            next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+            /^([0-9]+)\s+([0-9]+)$/ or fatal "bad index file: $index_file";
+            $index{$1} = $2;
+            $start //= $2;
+        }
+        fatal "empty record index mapping file $index_file" if !defined $start;
+    }
+    # Get internal record IDs from the database
     my @rec_id;
-    while (my ($id, $n) = $sth->fetchrow_array) {
-        $rec_id[$n] = $id;
+    {
+        local $/ = '';
+        my $log_header = <STDIN>;
+        my $sql = 'SELECT id, record_num FROM records WHERE file_id = ?';
+        my $sth = $dbh->prepare($sql);
+        while (my ($id, $n) = $sth->fetchrow_array) {
+            $rec_id[$n] = $id;
+        }
+        $sth->finish;
     }
-    $sth->finish;
-    $sql = 'INSERT INTO load_results (job_id, record_id, action, ils_num) VALUES (?, ?, ?, ?)';
-    $sth = $dbh->prepare($sql);
+    my $sql = 'INSERT INTO load_results (job_id, record_id, action, ils_num) VALUES (?, ?, ?, ?)';
+    my $sth = $dbh->prepare($sql);
     while (<STDIN>) {
         my ($n, @results) = split /\n/;
-        $n += $offset;
-        my $r = $rec_id[$n] or next;
+        if (%index) {
+            $n = $index{$n} or fatal "unmapped record index: $n";
+        }
+        else {
+            $n = $start + $n - 1;
+        }
+        my $r = $rec_id[$n] or fatal "Record $n of file $f doesn't exist in the database";
         my ($action, $bnum) = ('?', undef);
         foreach (@results) {
             if (/^B (...) ([0-9]+)$/) {
@@ -470,6 +496,7 @@ sub orient {
         'j|job=s'     => \$env{'job'},
         'f|file=s'    => \$env{'file'},
         'P|purpose=s' => \$env{'purpose'},
+        @_,
     ) or usage;
     ($group, $project, $update, $batch, $job, undef, $purpose) = @env{@env_keys};
     chdir($root) or fatal "chdir $root: $!";
