@@ -49,6 +49,7 @@ sub cmd_add_project {
 sub cmd_add_file {
     my %arg = orient();
     my $f = $arg{'file'} or fatal "no file specified";
+    my $p = $arg{'purpose'} or fatal "no purpose specified";
     -e $f or fatal "can't find file $f to add it";
     my $n;
     db_transact {
@@ -467,6 +468,7 @@ sub orient {
         'u|update=s'  => \$env{'update'},
         'b|batch=s'   => \$env{'batch'},
         'j|job=s'     => \$env{'job'},
+        'f|file=s'    => \$env{'file'},
         'P|purpose=s' => \$env{'purpose'},
     ) or usage;
     ($group, $project, $update, $batch, $job, undef, $purpose) = @env{@env_keys};
@@ -499,11 +501,11 @@ sub kvread {
 
 sub oclc_numbers {
     my @f035 = grep { $_->[TAG] eq '035' } @_;
-    my @onums;
+    my (%seen, @onums);
     foreach (@f035) {
         my $str = ${ $_->[VALREF] };
         next if $str !~ /\x1fa\(OCoLC\)[^1-9]*([0-9]+)/;
-        push @onums, $1;
+        push @onums, $1 if !$seen{$1}++;
     }
     return @onums if @onums;
     my ($f003) = grep { $_->[TAG] eq '003' } @_;
