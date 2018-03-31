@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 sub usage;
+sub warning;
 sub fatal;
 
 use DBI;
@@ -48,11 +49,12 @@ sub cmd_add_file {
     my %arg = orient();
     my $f = $arg{'file'} or fatal "no file specified";
     -e $f or fatal "can't find file $f to add it";
+    my $n;
     db_transact {
         $file = db_insert_file();
-        db_insert_records();
+        $n = db_insert_records();
     };
-    print STDERR "file added: $f\n";
+    print STDERR "file added: $f (records: $n)\n";
 }
 
 sub cmd_add_update {
@@ -60,13 +62,14 @@ sub cmd_add_update {
     my $p = $arg{'project'} or fatal "no project specified";
     my $u = $arg{'update'} or fatal "no update specified";
     !defined $update or fatal "update $u already exists";
+    my $n;
     db_transact {
         $arg{'file'} = glob("$root/$p/updates/$u/*.mrc");
         $file = db_insert_file();
         $update = db_insert_update();
-        db_insert_records();
+        $n = db_insert_records();
     };
-    print STDERR "update added: $u in $p\n";
+    print STDERR "update added: $u in $p (records: $n)\n";
 }
 
 sub cmd_add_job {
@@ -144,17 +147,16 @@ sub db_insert_project {
 sub db_insert_file {
     my %arg = @_;
     my ($f, $p) = @arg{qw(file purpose)};
-    my ($count, $md5sum) = examine($f);
-    my $sql = 'INSERT INTO files (path, num_records, md5sum, purpose) VALUES (?, ?, ?, ?)';
+    my $sql = 'INSERT INTO files (path, purpose, num_records, md5sum) VALUES (?, ?, ?, ?)';
     my $sth = $dbh->prepare($sql);
-    $sth->execute($f, $count, $md5sum, $p);
+    $sth->execute($f, $p, 0, '?');  # We'll calculate num_records and md5sum when we insert the records
     my $file_id = $dbh->last_insert_id('', '', '', '');
     return $file{$file_id} = {
         'id' => $file_id,
         'path' => $f,
-        'num_records' => $count,
-        'md5sum' => $md5sum,
         'purpose' => $p,
+        'num_records' => 0,
+        'md5sum' => '?',
     };
 }
 
@@ -198,13 +200,35 @@ sub db_insert_update {
 sub db_insert_records {
     my %arg = @_;
     my $f = $file->{'path'};
+    my $file_id = file_id($f);
+    my $sql = 'INSERT INTO records (file_id, record_num, oclc_num) VALUES (?, ?, ?)';
+    my $sth = $dbh->prepare($sql);
     open my $fh, '<', $f or fatal "open $f: $!";
     my $n = 0;
+    my $md5 = Digest->new('MD5');
     local $/ = "\x1d";
     while (defined (my $marc = <$fh>)) {
         $n++;
-        1;
+        $md5->add($marc);
+        my ($leader, $fields) = marcparse(\$marc, 'only' => [qw(001 003 035)]);
+        my ($onum, @etc) = sort { $a <=> $b } oclc_numbers(@$fields);
+        warning "multiple OCLC numbers in record $n\n" if @etc;
+        $sth->execute($file_id, $n, $onum);
+        # Commit every 100 records
+        if (($n % 100) == 0) {
+            db_end()
+            db_begin();
+        }
     }
+    $sth->finish;
+    $sql = 'UPDATE files SET num_records = ?, md5sum = ? WHERE file_id = ?';
+    $sth = $dbh->prepare($sql);
+    $sth->execute($n, $md5->hexdigest, $file_id);
+    return $n;
+}
+
+sub db_insert_load_results {
+    my %arg = @_;
 }
 
 sub group {
@@ -326,9 +350,8 @@ sub record {
     my ($sql, @params);
     if ($r =~ /^[0-9]+$/) {
         if (defined $f) {
-            my $file = file_id($f);
             $sql = 'SELECT * FROM records WHERE file_id = ? AND record_num = ?';
-            @params = ($file->{'id'});
+            @params = (file_id($f));
         }
         else {
             return $record{$r} if $record{$r};
@@ -412,19 +435,6 @@ sub orient {
     return %env;
 }
 
-sub examine {
-    my ($f) = @_;
-    open my $fh, '<', $f or fatal "open $f: $!";
-    my $md5 = Digest->new('MD5');
-    my $n = 0;
-    local $/ = "\x1d";
-    while (defined (my $marc = <$fh>)) {
-        $n++;
-        $md5->add($marc);
-    }
-    return ($n, $md5->hexdigest);
-}
-
 sub kvread {
     my ($f) = @_;
     open my $fh, '<', $f or fatal "open $f: $!";
@@ -441,6 +451,10 @@ sub kvread {
 sub usage {
     print STDERR "usage: vbdb COMMAND [ARG...]\n";
     exit 1;
+}
+
+sub warning {
+    print STDERR "vbdb: warning: @_\n";
 }
 
 sub fatal {
