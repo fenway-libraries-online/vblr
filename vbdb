@@ -14,7 +14,6 @@ use Getopt::Long
 sub db_transact(&);
 
 my $root = $ENV{'VBLR_ROOT'};
-my %env;
 my $dbh;
 my $trxlevel = 0;
 
@@ -31,23 +30,23 @@ $sub->();
 # --- Command handlers
 
 sub cmd_add_project {
-    orient();
-    my $g = $env{'group'};
-    my $p = $env{'project'} or fatal "no project specified";
+    my %arg = orient();
+    my $g = $arg{'group'};
+    my $p = $arg{'project'} or fatal "no project specified";
     !$project or fatal "project $p already exists";
     if (!$g) {
         ($g = $p) =~ s{/.+}{};
         $group = group($g);
     }
     db_transact {
-        $project = db_insert_project();
+        $project = db_insert_project(%arg);
     };
     print STDERR "project added: $p\n";
 }
 
 sub cmd_add_file {
-    orient();
-    my $f = $env{'file'} or fatal "no file specified";
+    my %arg = orient();
+    my $f = $arg{'file'} or fatal "no file specified";
     -e $f or fatal "can't find file $f to add it";
     db_transact {
         $file = db_insert_file();
@@ -57,24 +56,35 @@ sub cmd_add_file {
 }
 
 sub cmd_add_update {
-    orient();
-    my $p = $env{'project'} or fatal "no project specified";
-    my $u = $env{'update'} or fatal "no update specified";
+    my %arg = orient();
+    my $p = $arg{'project'} or fatal "no project specified";
+    my $u = $arg{'update'} or fatal "no update specified";
     !defined $update or fatal "update $u already exists";
     db_transact {
+        $arg{'file'} = glob("$root/$p/updates/$u/*.mrc");
+        $file = db_insert_file();
         $update = db_insert_update();
+        db_insert_records();
     };
     print STDERR "update added: $u in $p\n";
 }
 
 sub cmd_add_job {
-    orient();
-    my $j = $env{'job'} or fatal "no job specified";
+    my %arg = orient();
+    my $j = $arg{'job'} or fatal "no job specified";
     !defined $job or fatal "job $j already exists";
     db_transact {
         $job = db_insert_job();
     };
     print STDERR "job added: $j\n";
+}
+
+sub cmd_add_load_results {
+    my %arg = orient();
+    $project or fatal "not in a project";
+    $update or fatal "not in an update";
+    my $f = $arg{'file'} or fatal "no file specified";
+    $file ||= file($f);
 }
 
 # --- Database functions
@@ -97,13 +107,14 @@ sub db_transact(&) {
         $ok = 1;
     };
     return if $ok;
-    my $errstr = $dbh->errstr;
+    my $errstr = $dbh->errstr // $@;
     $dbh->rollback;
     fatal "transaction failed: $errstr";
 }
 
 sub db_insert_project {
-    my $p = $env{'project'};
+    my %arg = @_;
+    my $p = $arg{'project'};
     my $phash = kvread("$root/$p/project.kv");
     my $pcode = $phash->{'id'};
     my $descrip = $phash->{'description'} // '';
@@ -111,11 +122,12 @@ sub db_insert_project {
     my $ongoing = $freq =~ /^one-?time$/ ? 0 : 1;
     (my $code = $p) =~ s{.+/}{};
     (my $status = glob "$root/$p/\@*") =~ s{.+[@]}{};
+    my $t = time;
     my $group_id = group_id($group);
-    my $sql = 'INSERT INTO projects (code, pcode, status, description, ongoing, frequency, group_id) VALUES (?, ?, ?, ?)';
+    my $sql = 'INSERT INTO projects (code, pcode, status, description, ongoing, frequency, created, group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
     my $sth = $dbh->prepare($sql);
-    $sth->execute($code, $pcode, $status, $descrip, $ongoing, $freq, $group_id);
-    my $project_id = $sth->last_insert_id;
+    $sth->execute($code, $pcode, $status, $descrip, $ongoing, $freq, $t, $group_id);
+    my $project_id = $dbh->last_insert_id('', '', '', '');
     return $project{$p} = {
         'id' => $project_id,
         'code' => $code,
@@ -124,37 +136,38 @@ sub db_insert_project {
         'description' => $descrip,
         'ongoing' => $ongoing,
         'frequency' => $freq,
+        'created' => $t,
         'group_id' => $group_id,
     };
 }
 
 sub db_insert_file {
-    my ($f, $p) = @env{qw(file purpose)};
-    (my $name = $f) =~ s{.+/}{};
-    (my $dir  = $f) =~ s{/[^/]+$}{};
+    my %arg = @_;
+    my ($f, $p) = @arg{qw(file purpose)};
     my ($count, $md5sum) = examine($f);
-    my $sql = 'INSERT INTO files (name, directory, num_records, purpose) VALUES (?, ?, ?, ?)';
+    my $sql = 'INSERT INTO files (path, num_records, md5sum, purpose) VALUES (?, ?, ?, ?)';
     my $sth = $dbh->prepare($sql);
-    $sth->execute($name, $dir, $count, $p);
-    my $file_id = $sth->last_insert_id;
+    $sth->execute($f, $count, $md5sum, $p);
+    my $file_id = $dbh->last_insert_id('', '', '', '');
     return $file{$file_id} = {
         'id' => $file_id,
-        'name' => $name,
-        'directory' => $dir,
+        'path' => $f,
         'num_records' => $count,
+        'md5sum' => $md5sum,
         'purpose' => $p,
     };
 }
 
 sub db_insert_job {
+    my %arg = @_;
     my $sql = 'INSERT INTO jobs (jcode, first, last, file_id, update_id) VALUES (?, ?, ?, ?, ?)';
     my $j = job_id($job);
-    my ($b, $e) = split /-/, ($env{'batch'} || die "job batch range not specified: $j");
+    my ($b, $e) = split /-/, ($arg{'batch'} || die "job batch range not specified: $j");
     my $f = $file->{'id'};
     my $u = $update ? $update->{'id'} : undef;
     my $sth = $dbh->prepare($sql);
     $sth->execute($j, $b, $e, $f, $u);
-    my $id = $sth->last_insert_id;
+    my $id = $dbh->last_insert_id('', '', '', '');
     return $job{$id} = {
         'id' => $id,
         'jcode' => $j,
@@ -167,21 +180,24 @@ sub db_insert_job {
 }
 
 sub db_insert_update {
-    my $sql = 'INSERT INTO updates (code, purpose, project_id, file_id) VALUES (?, ?, ?, ?)';
+    my %arg = @_;
+    my $t = time;
+    my $sql = 'INSERT INTO updates (code, purpose, created, project_id, file_id) VALUES (?, ?, ?, ?, ?)';
     my $sth = $dbh->prepare($sql);
-    $sth->execute($env{'update'}, $env{'purpose'}, project_id($project), file_id($env{'file'}));
-    my $update_id = $sth->last_insert_id;
+    $sth->execute($arg{'update'}, $arg{'purpose'}, $t, project_id($project), file_id($arg{'file'}));
+    my $update_id = $dbh->last_insert_id('', '', '', '');
     return $update{$update_id} = {
         'id' => $update_id,
-        'code' => $env{'update'},
-        'purpose' => $env{'purpose'},
-        'project' => $env{'project'},
-        'file' => $env{'file'},
+        'code' => $arg{'update'},
+        'purpose' => $arg{'purpose'},
+        'project' => $arg{'project'},
+        'file' => $arg{'file'},
     };
 }
 
 sub db_insert_records {
-    my $f = sprintf '%s/%s', $file->{'directory'}, $file->{'name'};
+    my %arg = @_;
+    my $f = $file->{'path'};
     open my $fh, '<', $f or fatal "open $f: $!";
     my $n = 0;
     local $/ = "\x1d";
@@ -291,12 +307,8 @@ sub file {
         $sql = 'SELECT * FROM files WHERE id = ?';
         @params = ($f);
     }
-    elsif ($f =~ m{/}) {
-        $sql = 'SELECT * FROM files WHERE directory = ? AND name = ?';
-        @params = (dirname($f), basename($f));
-    }
     else {
-        $sql = 'SELECT * FROM files WHERE name = ?';
+        $sql = 'SELECT * FROM files WHERE path = ?';
         @params = ($f);
     }
     my $sth = $dbh->prepare($sql);
@@ -371,21 +383,21 @@ sub orient {
     $root = $ENV{'VBLR_ROOT'};
     my $dbfile = 'vbdb.sqlite3';
     my @env_keys = qw(group project update batch job file purpose);
-    %env = map { $_ => $ENV{'VBLR_' . uc($_)} } @env_keys;
+    my %env = map { $_ => $ENV{'VBLR_' . uc($_)} } @env_keys;
     # Don't attempt to instantiate $file from $ENV{'VBLR_FILE'}
-    ($group, $project, $update, $batch, $job, undef, $purpose) = @env{@env_keys};
     GetOptions(
         # General
         'r|root=s'    => \$root,
         'd|db-file=s' => \$dbfile,
         # Environment/context
-        'g|group=s'   => \$group,
-        'p|project=s' => \$project,
-        'u|update=s'  => \$update,
-        'b|batch=s'   => \$batch,
-        'j|job=s'     => \$job,
-        'P|purpose=s' => \$purpose,
+        'g|group=s'   => \$env{'group'},
+        'p|project=s' => \$env{'project'},
+        'u|update=s'  => \$env{'update'},
+        'b|batch=s'   => \$env{'batch'},
+        'j|job=s'     => \$env{'job'},
+        'P|purpose=s' => \$env{'purpose'},
     ) or usage;
+    ($group, $project, $update, $batch, $job, undef, $purpose) = @env{@env_keys};
     chdir($root) or fatal "chdir $root: $!";
     $dbh = DBI->connect("dbi:SQLite:dbname=$dbfile", '', '', {
         'FetchHashKeyName' => 'NAME_lc',
@@ -397,6 +409,7 @@ sub orient {
         $update = eval { project_update($project, $update) } if $update;
     }
     $job = eval { job($job) } if $job;
+    return %env;
 }
 
 sub examine {
@@ -425,3 +438,12 @@ sub kvread {
     return \%hash;
 }
 
+sub usage {
+    print STDERR "usage: vbdb COMMAND [ARG...]\n";
+    exit 1;
+}
+
+sub fatal {
+    print STDERR "vbdb: @_\n";
+    exit 2;
+}
