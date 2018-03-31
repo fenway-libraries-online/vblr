@@ -56,7 +56,7 @@ CREATE TABLE jobs (
 CREATE TABLE load_results (
     job_id      INTEGER NOT NULL REFERENCES jobs(id),
     record_id   INTEGER NOT NULL REFERENCES records(id),
-    action      VARCHAR NULL,
+    action      VARCHAR NULL,   /* A=added, R=replaced, D=deleted, M=matched, U=unresolved, etc. */
     ils_num     INTEGER NULL
 );
 
