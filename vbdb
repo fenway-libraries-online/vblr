@@ -12,15 +12,8 @@ use IPC::Run qw(run);
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
+my ($root, $dbfile);
 my %env = read_environment();
-my $root = eval { env('root') };
-my $dbfile;
-
-GetOptions(
-    'r|root=s' => \$root,
-    'd|db-file=s' => \$dbfile,
-) or usage;
-$dbfile ||= $root . '/' . 'vbdb.sqlite';
 
 my (%project, %file, %record, %fields, %matches, %results);
 
@@ -33,6 +26,7 @@ $sub->();
 # --- Command handlers
 
 sub cmd_dbi {
+    readopts();
     system('sqlite3', $dbfile);
 }
 
@@ -42,6 +36,7 @@ sub cmd_auto {
 }
 
 sub cmd_auto_trace {
+    readopts();
     my ($p, $u, $b) = env(qw(project update batch));
     $b =~ /^([1-9][0-9]*)-([1-9][0-9]*)$/ or die "unrecognized batch: $b";
     my $n = $1;
@@ -65,22 +60,97 @@ sub cmd_auto_hook {
 }
 
 sub cmd_auto_hook_added {
-    my ($r, $p, $u) = env(qw(root project update));
-    my ($f) = glob("$r/$p/updates/$u/*.mrc")
-        or fatal "no MARC file for update $u in project $p";
-    (my $b = $f) =~ s{.+/}{};
-    my ($fid, $count);
-    run([qw(pfr add file), -d => $dbfile, "pkey:$p", "fkey=$u", "name=$b"], \$fid)
-        or fatal "exec pfr add file: exit status $?";
-    run([qw(marc2pfr -o)], '<', $f, '|', [qw(pfr add records), -d => $dbfile, "pkey:$p", "fkey:$u"], \$count)
-        or fatal "exec pfr add records: exit status $?";
-    chomp $fid, $count;
+    my ($add_records, $add_matches) = (0, 0);
+    readopts(
+        'r|add-records' => \$add_records,
+        'm|add-matches' => \$add_matches,
+    );
+    $add_records = 1 if $add_matches;
+    my ($r, $p, $u, $purpose) = env(qw(root project update purpose));
+    my ($f, $added) = pfr_add_file($r, $p, $u, $purpose);
+    pfr_add_records($p, $u, $f) if $add_records;
+    pfr_add_matches($p, $u, $f) if $add_matches;
+}
+
+sub cmd_auto_hook_prepared {
+    my ($add_records, $add_matches, $added, $matched) = (1, 1, 0, 0);
+    readopts(
+        'R|no-add-records' => sub { $add_records = 0 },
+        'M|no-add-matches' => sub { $add_matches = 0 },
+    );
+    $add_records = 1 if $add_matches;
+    my ($r, $p, $u, $b, $purpose) = env(qw(root project update batch purpose));
+    $b =~ /^([1-9][0-9]*)-([1-9][0-9]*)$/ or fatal "unrecognized batch: $b";
+    my ($s, $e) = ($1, $2);
+    my ($f) = glob("$r/$p/updates/$u/batches/$b/records.mrc")
+        or fatal "no MARC file for batch $b of update $u in project $p";
+    pfr_add_records($p, $u, $f, $s) if $add_records;
+    pfr_add_matches($p, $u, $f, $s) if $add_matches;
 }
 
 sub cmd_auto_hook_loaded {
+    readopts();
+    my ($r, $p, $u, $b, $j, $purpose) = env(qw(root project update batch job purpose));
+    my $jid = pfr_add_job($r, $p, $u, $b, $j);
+    my $res = pfr_add_results($r, $p, $u, $b, $j);
 }
 
-# --- Functions
+# --- pfr invocations
+
+sub pfr_add_file {
+    my ($r, $p, $u, $purpose) = @_;
+    my ($f) = glob("$r/$p/updates/$u/*.mrc")
+        or fatal "no MARC file for update $u in project $p";
+    (my $fbase = $f) =~ s{.+/}{};
+    my $fid;
+    run([qw(pfr add file), -d => $dbfile, "pkey:$p", "fkey=$u", "name=$fbase", "purpose=$purpose"], \$fid)
+        or fatal "exec pfr add file: $?";
+    chomp $fid;
+    return wantarray ? ($f, $fid) : $f;
+}
+
+sub pfr_add_records {
+    my ($p, $u, $f, $s) = @_;
+    $s ||= 1;
+    my $n;
+    run([qw(marc2pfr -o -n), $s], '<', $f, '|', [qw(pfr add records), -d => $dbfile, "pkey:$p", "fkey:$u"], \$n)
+        or fatal "exec pfr add records: $?";
+    chomp $n;
+    return $n;
+}
+
+sub pfr_add_matches {
+    my ($p, $u, $f, $s) = @_;
+    $s ||= 1;
+    my $n;
+    run([qw(marc2pfr -o -n), $s], '<', $f, '|', [qw(pfr add matches), -d => $dbfile, "pkey:$p", "fkey:$u"], \$n)
+        or fatal "exec pfr add matches: $?";
+    chomp $n;
+    return $n;
+}
+
+sub pfr_add_job {
+    my ($r, $p, $u, $b, $j) = @_;
+    my $jdir = "$r/$p/updates/$u/batches/$b/jobs/$j";
+    -d $jdir or fatal "no job $j for batch $b of update $u in project $p";
+    my $jid;
+    run([qw(pfr add job), -d => $dbfile, "pkey:$p", "fkey:$u", "jkey=$j", "name=$fbase", "purpose=$purpose"], \$fid)
+        or fatal "exec pfr add job: $?";
+    chomp $jid;
+    return $jid;
+}
+
+# --- Other functions
+
+sub readopts {
+    $root = eval { env('root') };
+    $dbfile = $ENV{'VBDB_FILE'};
+    GetOptions(
+        'r|root=s' => \$root,
+        'd|db-file=s' => \$dbfile,
+    ) or usage;
+    $dbfile ||= $root . '/' . 'vbdb.sqlite';
+}
 
 sub subcmd {
     usage if !@ARGV;
