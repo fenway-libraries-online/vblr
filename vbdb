@@ -8,8 +8,19 @@ sub warning;
 sub fatal;
 
 use MARC::Loop qw(marcloop marcfield TAG DELETE VALREF);
+use IPC::Run qw(run);
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
+
+my %env = read_environment();
+my $root = eval { env('root') };
+my $dbfile;
+
+GetOptions(
+    'r|root=s' => \$root,
+    'd|db-file=s' => \$dbfile,
+) or usage;
+$dbfile ||= $root . '/' . 'vbdb.sqlite';
 
 my (%project, %file, %record, %fields, %matches, %results);
 
@@ -19,15 +30,6 @@ $cmd =~ tr/-/_/;
 my $sub = __PACKAGE__->can("cmd_$cmd") || usage;
 $sub->();
 
-my $root = $ENV{'VBLR_ROOT'};
-my $dbfile;
-
-GetOptions(
-    'r|root=s' => \$root,
-    'd|db-file=s' => \$dbfile,
-) or usage;
-$dbfile ||= $root . '/' . $dbfile;
-
 # --- Command handlers
 
 sub cmd_dbi {
@@ -35,12 +37,12 @@ sub cmd_dbi {
 }
 
 sub cmd_auto {
-    fatal "not running in a vblr environment" if !defined $ENV{'VBLR_ROOT'};
+    env('root');
     subcmd();
 }
 
 sub cmd_auto_trace {
-    my ($p, $u, $b) = @ENV{qw(VBLR_PROJECT VBLR_UPDATE VBLR_BATCH)};
+    my ($p, $u, $b) = env(qw(project update batch));
     $b =~ /^([1-9][0-9]*)-([1-9][0-9]*)$/ or die "unrecognized batch: $b";
     my $n = $1;
     my $tag = '997';
@@ -54,16 +56,28 @@ sub cmd_auto_trace {
                 n => $n++,
         );
     } \*STDIN, 'print_all' => 1, 'error' => sub { die };
-    ### my @cmd = (
-    ###     'marcappend',
-    ###     '-s' => $b,
-    ###     '997', '[',
-    ###         '-p' => $p,
-    ###         '-f' => $u,
-    ###         '-n' => '%(1)',
-    ###     ']'
-    ### );
-    ### system(@cmd) == 0 or fatal "exec marcappend $!";
+}
+
+sub cmd_auto_hook {
+    my ($h) = env('hook');
+    unshift @ARGV, $h if !@ARGV || $ARGV[0] =~ /^-/;
+    subcmd();
+}
+
+sub cmd_auto_hook_added {
+    my ($r, $p, $u) = env(qw(root project update));
+    my ($f) = glob("$r/$p/updates/$u/*.mrc")
+        or fatal "no MARC file for update $u in project $p";
+    (my $b = $f) =~ s{.+/}{};
+    my ($fid, $count);
+    run([qw(pfr add file), -d => $dbfile, "pkey:$p", "fkey=$u", "name=$b"], \$fid)
+        or fatal "exec pfr add file: exit status $?";
+    run([qw(pfr add records), -d => $dbfile, "pkey:$p", "fkey:$u", '<', $f], \$count)
+        or fatal "exec pfr add records: exit status $?";
+    chomp $fid, $count;
+}
+
+sub cmd_auto_hook_loaded {
 }
 
 # --- Functions
@@ -76,3 +90,43 @@ sub subcmd {
     goto &{ __PACKAGE__->can($1.'_'.$subcmd) || usage };
 }
 
+sub read_environment {
+    my %e;
+    while (my ($k, $v) = each %ENV) {
+        next if $k !~ s/^VBLR_//;
+        $e{lc $k} = $v;
+    }
+    return %e;
+}
+
+sub env {
+    my @e;
+    foreach (@_) {
+        my $k = 'VBLR_' . uc $_;
+        die "environment variable not set: $k" if !defined $ENV{$k};
+        push @e, $ENV{$k};
+    }
+    return @e if wantarray;
+    return \@e if @_ > 1;
+    return $e[0];
+}
+
+sub optenv {
+    my @e;
+    foreach (@_) {
+        my $k = 'VBLR_' . uc $_;
+        push @e, $ENV{$k};
+    }
+    return @e;
+}
+
+sub usage {
+    print STDERR "usage: vbdb COMMAND [ARG...]\n";
+    exit 1;
+}
+
+sub fatal {
+    print STDERR "vbdb: ", shift(), "\n";
+    print STDERR $_, "\n" for @_;
+    exit 2;
+}
