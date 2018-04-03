@@ -2991,11 +2991,11 @@ sub run_hook {
     my $f = find("bin/hook.$hook", reverse @where);
     if (defined $f && -x $f) {
         local %ENV = %ENV;
+        @arg{qw(hook root project)} = ($hook, $root, $pcur);
         while (my ($k, $v) = each %arg) {
             delete $ENV{'VBLR_'.uc($k)};
             $ENV{'VBLR_'.uc($k)} = $v if defined $v;
         }
-        $ENV{'VBLR_PROJECT'} ||= $project->{'code'};
         system($f);
     }
 }
