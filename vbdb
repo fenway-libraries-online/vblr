@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+sub usage;
+sub warning;
+sub fatal;
+
+use MARC::Loop qw(marcloop marcfield TAG DELETE VALREF);
+use Getopt::Long
+    qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
+
+my (%project, %file, %record, %fields, %matches, %results);
+
+@ARGV = qw(shell) if !@ARGV;
+my $cmd = shift @ARGV;
+$cmd =~ tr/-/_/;
+my $sub = __PACKAGE__->can("cmd_$cmd") || usage;
+$sub->();
+
+my $root = $ENV{'VBLR_ROOT'};
+my $dbfile;
+
+GetOptions(
+    'r|root=s' => \$root,
+    'd|db-file=s' => \$dbfile,
+) or usage;
+$dbfile ||= $root . '/' . $dbfile;
+
+# --- Command handlers
+
+sub cmd_dbi {
+    system('sqlite3', $dbfile);
+}
+
+sub cmd_auto {
+    fatal "not running in a vblr environment" if !defined $ENV{'VBLR_ROOT'};
+    subcmd();
+}
+
+sub cmd_auto_trace {
+    my ($p, $u, $b) = @ENV{qw(VBLR_PROJECT VBLR_UPDATE VBLR_BATCH)};
+    $b =~ /^([1-9][0-9]*)-([1-9][0-9]*)$/ or die "unrecognized batch: $b";
+    my $n = $1;
+    my $tag = '997';
+    marcloop {
+        my ($leader, $fields) = @_;
+        $_->[DELETE] = 1 for grep { $_->[TAG] eq $tag } @$fields;
+        push @$fields, marcfield(
+            $tag, ' ', ' ',
+                p => $p,
+                f => $u,
+                n => $n++,
+        );
+    } \*STDIN, 'print_all' => 1, 'error' => sub { die };
+    ### my @cmd = (
+    ###     'marcappend',
+    ###     '-s' => $b,
+    ###     '997', '[',
+    ###         '-p' => $p,
+    ###         '-f' => $u,
+    ###         '-n' => '%(1)',
+    ###     ']'
+    ### );
+    ### system(@cmd) == 0 or fatal "exec marcappend $!";
+}
+
+# --- Functions
+
+sub subcmd {
+    usage if !@ARGV;
+    my $subcmd = shift @ARGV;
+    my @caller = caller 1;
+    $caller[3] =~ /(cmd_\w+)$/ or die;
+    goto &{ __PACKAGE__->can($1.'_'.$subcmd) || usage };
+}
+
