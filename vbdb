@@ -91,7 +91,7 @@ sub cmd_auto_hook_prepared {
 sub cmd_auto_hook_loaded {
     readopts();
     my ($r, $p, $u, $b, $j, $purpose) = env(qw(root project update batch job purpose));
-    my $jid = pfr_add_job($r, $p, $u, $b, $j);
+    my $jid = pfr_add_job($r, $p, $u, $b, $j, $purpose);
     my $res = pfr_add_results($r, $p, $u, $b, $j);
 }
 
@@ -103,7 +103,7 @@ sub pfr_add_file {
         or fatal "no MARC file for update $u in project $p";
     (my $fbase = $f) =~ s{.+/}{};
     my $fid;
-    run([qw(pfr add file), -d => $dbfile, "pkey:$p", "fkey=$u", "name=$fbase", "purpose=$purpose"], \$fid)
+    run(pfrcmd('add file', "pkey:$p", "fkey=$u", "name=$fbase", "purpose=$purpose"), \$fid)
         or fatal "exec pfr add file: $?";
     chomp $fid;
     return wantarray ? ($f, $fid) : $f;
@@ -113,7 +113,7 @@ sub pfr_add_records {
     my ($p, $u, $f, $s) = @_;
     $s ||= 1;
     my $n;
-    run([qw(marc2pfr -o -n), $s], '<', $f, '|', [qw(pfr add records), -d => $dbfile, "pkey:$p", "fkey:$u"], \$n)
+    run([qw(marc2pfr -o -n), $s], '<', $f, '|', pfrcmd('add records', "pkey:$p", "fkey:$u"), \$n)
         or fatal "exec pfr add records: $?";
     chomp $n;
     return $n;
@@ -123,21 +123,26 @@ sub pfr_add_matches {
     my ($p, $u, $f, $s) = @_;
     $s ||= 1;
     my $n;
-    run([qw(marc2pfr -o -n), $s], '<', $f, '|', [qw(pfr add matches), -d => $dbfile, "pkey:$p", "fkey:$u"], \$n)
+    run([qw(marc2pfr -o -n), $s], '<', $f, '|', pfrcmd('add matches', "pkey:$p", "fkey:$u"), \$n)
         or fatal "exec pfr add matches: $?";
     chomp $n;
     return $n;
 }
 
 sub pfr_add_job {
-    my ($r, $p, $u, $b, $j) = @_;
+    my ($r, $p, $u, $b, $j, $purpose) = @_;
     my $jdir = "$r/$p/updates/$u/batches/$b/jobs/$j";
     -d $jdir or fatal "no job $j for batch $b of update $u in project $p";
     my $jid;
-    run([qw(pfr add job), -d => $dbfile, "pkey:$p", "fkey:$u", "jkey=$j", "name=$fbase", "purpose=$purpose"], \$fid)
+    run(pfrcmd('add job', "pkey:$p", "fkey:$u", "jkey=$j", "purpose=$purpose"), \$jid)
         or fatal "exec pfr add job: $?";
     chomp $jid;
     return $jid;
+}
+
+sub pfrcmd {
+    my $cmd = shift;
+    return [ 'pfr', split(/\s+/, $cmd), '-z', '-d' => $dbfile, @_ ];
 }
 
 # --- Other functions
