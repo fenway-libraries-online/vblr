@@ -2,23 +2,33 @@ include config.mk
 
 scripts = vblr vbdb $(ILS)/bin/*
 
-all: check
+build: configure check root
+
+install: build install-vblr
+	@echo Installing root for $(ILS)
+	install -d $(ROOT)
+	cp -R build/root/* $(ROOT)/
+
+configure: config.mk
+
+config.mk:
+	./configure
+
+root: build/root/root.kv
+	@bbin/build-root $(ILS)
+
+build/root/root.kv:
+	@mkdir -p build/root
+	@bbin/configure.$(ILS) > $@
 
 check:
-	@build/check-syntax $(scripts)
-	@build/check-prereqs $(ILS)
-
-install: check install-for-$(ILS)
-	@echo Installing for $(ILS)
-
-install-for-koha: install-vblr koha/bin/ils.load
-	@build/make-root $(ILS) $(ROOT)
-	cp -R koha/bin $(ROOT)/
-
-install-for-voyager: install-vblr voyager/bin/ils.load
-	@build/make-root $(ILS) $(ROOT)
+	@bbin/check-syntax $(scripts)
+	@bbin/check-prereqs $(ILS)
 
 install-vblr: vblr
+	@echo Installing vblr and vbdb
 	install -d $(PREFIX)/bin
 	install vblr $(PREFIX)/bin/
 	install vbdb $(PREFIX)/bin/
+
+.PHONY: all configure check build root install install-vblr

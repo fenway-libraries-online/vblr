@@ -14,7 +14,6 @@ EOS
             *)  cancelled ;;
         esac
     fi
-    clear
     cat <<EOS >&2
 ============================== vblr configuration ==============================
 
@@ -35,7 +34,7 @@ The three questions are:
     (*) Where should vblr be installed?
     (*) Where should vblr keep its data files?
 
-Press Enter when you're ready to proceed...
+Press Enter when you're ready to proceed, or enter Q to cancel...
 
 EOS
     read REPLY
@@ -145,7 +144,7 @@ EOS
 
 cancelled() {
     echo >&2
-    echo 'Cancelled.  Come back again!' >&2
+    echo 'Cancelled' >&2
     exit 1
 }
 

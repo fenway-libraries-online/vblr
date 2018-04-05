@@ -1,0 +1,6 @@
+#!/bin/sh
+
+ILS=$1
+
+mkdir -p build/root
+cp -R ./$ILS/* build/root/

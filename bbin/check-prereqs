@@ -1,0 +1,5 @@
+#!/bin/sh
+
+ILS=$1
+
+bbin/check-perl-modules $ILS

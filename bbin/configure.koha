@@ -1,0 +1,63 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+print STDERR "Building root.kv for Koha...\n";
+
+my %conf = ('ils' => 'koha');
+
+$ENV{'PATH'} = "$ENV{PATH}:/usr/sbin";
+
+$conf{'koha-site'} = choose('Koha site name' => [qx/koha-list --enabled/]);
+$conf{'koha-user'} = choose('Koha Unix user name' => [qx/koha-shell -c 'id -un' $conf{'koha-site'}/]);
+
+foreach my $k (sort keys %conf) {
+    print $k, ' ', $conf{$k}, "\n";
+}
+
+sub choose {
+    my ($label, $choices, $default) = @_;
+    print STDERR $label, ': ';
+    my @choices = $choices ? @$choices : ();
+    chomp @choices;
+    my $i = 0;
+    my %choice2num = map { $_ => ++$i } @choices;
+    if (defined $default && !exists $choice2num{$default}) {
+        $choice2num{$default} = ++$i;
+    }
+    my %num2choice = reverse %choice2num;
+    if (@choices == 1) {
+        print STDERR $choices[0], "\n";
+        return $choices[0];
+    }
+    elsif (@choices == 0) {
+        if (defined $default) {
+            print STDERR $default, "\n";
+            return $default;
+        }
+        while (1) {
+            my $choice = <STDIN>;
+            print(STDERR "Cancelled\n"), exit 1 if !defined $choice;
+            chomp $choice;
+            return $choice if length $choice;
+        }
+    }
+    else {
+        foreach my $j (1..$i) {
+            printf STDERR "  %2d) %s\n", $j, $num2choice{$j};
+        }
+        while (1) {
+            print 'Your choice: ';
+            print STDERR '[', $choice2num{$default}, '] ' if defined $default;
+            my $j = <STDIN>;
+            print(STDERR "Cancelled\n"), exit 1 if !defined $j;
+            chomp $j;
+            return $num2choice{$j} if defined $num2choice{$j};
+            if (!length $j) {
+                return $default if defined $default;
+            }
+            print STDERR "  ** try again\n";
+        }
+    }
+}
