@@ -2727,9 +2727,9 @@ sub load_batch {
     }
     wrkvfile($jfile, $job);
     wrstatus($jdir, LOADING);
+    my $log = $arg{'log'} = "$jdir/output/$j.log";
+    run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose, log => $log);
     my ($err, $out) = run($cmd, 'args' => [kvparams(%$job, %arg)], 'env' => {envparams(%$job, %arg)});
-    run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose);
-    my $log = "$jdir/output/$j.log";
     my @results = load_results($log);
     my %num;
     my $drops = 0;
@@ -2774,21 +2774,22 @@ sub load_batch {
     );
     if ($result eq ERR) {
         apnext('check', update => $u, batch => $b);
+        run_hook('failed', update => $u, batch => $b, job => $j, purpose => $purpose, log => $log);
     }
     else {
         aplast('load', update => $u, batch => $b, job => $j);
         apnext('finish', update => $u, batch => $b);
+        if ($opt{'autogen_loaded'}) {
+            open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
+            copy($fh, "$jdir/loaded.mrc");
+        }
+        if ($opt{'gen_html'} && $n <= 5000) {
+            local @ARGV = ('-j' => $j);
+            cmd_mkhtml();
+        }
+        mkdrops($j) if $job->{'discard'} > 0;
+        run_hook('loaded', update => $u, batch => $b, job => $j, purpose => $purpose, log => $log);
     }
-    if ($opt{'autogen_loaded'}) {
-        open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
-        copy($fh, "$jdir/loaded.mrc");
-    }
-    if ($opt{'gen_html'} && $n <= 5000) {
-        local @ARGV = ('-j' => $j);
-        cmd_mkhtml();
-    }
-    mkdrops($j) if $job->{'discard'} > 0;
-    run_hook('loaded', update => $u, batch => $b, job => $j, purpose => $purpose);
 }
 
 sub finish_update {
