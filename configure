@@ -1,6 +1,19 @@
 #!/bin/sh -e
 
 main() {
+    if [ -e config.mk ]; then
+        cat <<EOS >&2
+It looks as though vblr has already been configured.  Do you want to delete
+the file "config.mk" and start over again?
+
+EOS
+        echo -n '  Start over? '
+        read REPLY
+        case "$REPLY" in
+            y*) rm -f config.mk ;;
+            *)  cancelled ;;
+        esac
+    fi
     clear
     cat <<EOS >&2
 ============================== vblr configuration ==============================

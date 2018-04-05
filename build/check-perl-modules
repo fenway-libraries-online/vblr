@@ -1,0 +1,65 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+my ($ILS) = @_;
+my @failed;
+
+print STDERR "Checking required Perl modules...\n";
+while (<DATA>) {
+    next if /^#/;
+    chomp;
+    my $ok = eval { eval "use $_; 1" };
+    if ($ok) {
+        print STDERR " ok  $_\n";
+    }
+    else {
+        print STDERR "FAIL $_ -- missing\n";
+        push @failed, $_;
+    }
+}
+
+if (@failed) {
+    my $n = @failed;
+    if (@failed == 1) {
+        print STDERR "You are missing 1 module.  I can install this for you.\n";
+    }
+    else {
+        print STDERR "You are missing $n modules.  I can install these for you.\n";
+    }
+}
+else {
+    print STDERR "You have all the required modules.\n";
+    print STDERR "\n";
+    exit 0;
+}
+
+foreach my $module (@failed) {
+    1;
+}
+
+exit 1;
+
+__END__
+### Don't change anything below this line ###
+### It was generated automatically        ###
+Cwd
+DB_File
+Digest::SHA1
+File::Basename
+File::Copy
+File::Kit
+File::Kvpar
+File::Spec
+Getopt::Long
+IO::Compress::Gzip
+IO::Handle
+MIME::Base64
+POSIX
+String::Expando
+String::ShellQuote
+Text::Glob
+Text::ParseWords
+Time::HiRes
+YAML

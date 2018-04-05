@@ -5,8 +5,8 @@ scripts = vblr vbdb $(ILS)/bin/*
 all: check
 
 check:
-	@echo 'Checking scripts...' >&2
 	@build/check-syntax $(scripts)
+	@build/check-prereqs $(ILS)
 
 install: check install-for-$(ILS)
 	@echo Installing for $(ILS)
