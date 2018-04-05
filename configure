@@ -1,0 +1,144 @@
+#!/bin/sh -e
+
+main() {
+    clear
+    cat <<EOS >&2
+============================== vblr configuration ==============================
+
+Step 0. Introduction
+
+Congratulations on choosing vblr!  It's time to configure your setup.
+
+This step will produce the file 'config.mk', which you may edit later if you
+wish.  It will not make any other changes.
+
+There are three questions.  If you don't know the answer to any of them yet,
+just enter Q to cancel, research your answers, and run this script again when
+you're ready.
+
+The three questions are:
+
+    (*) What ILS will vblr be working with?
+    (*) Where should vblr be installed?
+    (*) Where should vblr keep its data files?
+
+Press Enter when you're ready to proceed...
+
+EOS
+    read REPLY
+    [ "$REPLY" != "Q" ] && [ "$REPLY" != "q" ] || cancelled
+    clear
+
+    # Which ILS?
+    clear
+    cat <<EOS >&2
+============================== vblr configuration ==============================
+
+Step 1.
+
+What ILS will vblr be working with?
+        
+        >>> vblr is compatible with Voyager and Koha.
+
+EOS
+    while true; do
+        echo -n '  Your ILS (Koha or Voyager): ' >&2
+        read ILS
+        echo "$ILS" | tr A-Z a-z | read ILS
+        case "$ILS" in
+            q|Q)
+                cancelled ;;
+            koha|voyager)
+                break ;;
+            *)  echo '    ** vblr only works with Koha or Voyager **' >&2
+                ;;
+        esac
+    done
+
+    # Where to install?
+    clear
+    cat <<EOS >&2
+============================== vblr configuration ==============================
+
+Step 2.
+
+Where should vblr be installed?
+
+        >>> Likely candidates are /usr/local/vblr or /opt/vblr but you may
+            specify any file path.  Nothing will actually be installed yet;
+            this is just for configuration purposes
+
+EOS
+    while true; do
+        echo -n '  Install location: ' >&2
+        read PREFIX
+        case "$PREFIX" in
+            q|Q)
+                cancelled ;;
+            /|/usr|/usr/local|/opt|/opt/local)
+                echo "    ** That\'s not a good place to install things -- try adding /vblr at the end ** " >&2
+                ;;
+            /*) break ;;
+            *)  echo '    ** You must specify an absolute path **' >&2
+                ;;
+        esac
+    done
+
+    # Where to put VBLR_ROOT?
+    clear
+    cat <<EOS >&2
+============================== vblr configuration ==============================
+
+Step 3.
+
+Where should vblr keep its data files?
+
+        >>> You can either use the default or specify some other location.
+            All data files will be placed within it, so make sure it's
+            somewhere that will get backed up regularly!
+
+        >>> The default is: ${PREFIX}/data
+
+EOS
+    while true; do
+        echo -n '  Data location: ' >&2
+        read ROOT
+        case "$ROOT" in
+            q|Q)
+                cancelled ;;
+            /|/usr|/usr/local|/opt|/opt/local)
+                echo "    ** That\'s not a good place to install things -- try adding /vblr at the end **" >&2
+                ;;
+            /*) break ;;
+            '') ROOT=${PREFIX}/data
+                ;;
+            *) echo '    ** You must specify an absolute path **' >&2
+                ;;
+        esac
+    done
+    cat <<EOS > config.mk
+ILS = $ILS
+PREFIX = $PREFIX
+ROOT = $ROOT
+EOS
+    cat <<EOS >&2
+
+Congratulations, you've just configured vblr!
+
+The next step is to run the "make" command.
+
+EOS
+}
+
+cancelled() {
+    echo >&2
+    echo 'Cancelled.  Come back again!' >&2
+    exit 1
+}
+
+fatal() {
+    echo "$*" >&2
+    exit 2
+}
+
+main "$@"

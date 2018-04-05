@@ -1,0 +1,54 @@
+#!/bin/zsh
+
+integer err=0
+
+main() {
+    for f in $@; do
+        case "$(head -n1 < $f)" in
+            (*zsh*)  check-zsh $f  ;;
+            (*perl*) check-perl $f ;;
+            (*sh*)   check-sh $f   ;;
+            (*)      fatal "unknown file type: $f" ;;
+        esac
+    done
+}
+
+ok() {
+    print " ok  $1" >&2
+}
+
+fail() {
+    print "FAIL $1" >&2
+    err=1
+}
+
+check-perl() {
+    if perl -c $1 2>&1 | fgrep -iq error; then
+        fail $1
+    else
+        ok $1
+    fi
+}
+
+check-zsh() {
+    if zsh -n $1 > /dev/null 2>&1; then
+        ok $1
+    else
+        fail $1
+    fi
+}
+
+check-sh() {
+    if sh -n $1 > /dev/null 2>&1; then
+        ok $1
+    else
+        fail $1
+    fi
+}
+
+fatal() {
+    print "fatal error: $*" >&2
+    exit 2
+}
+
+main "$@"

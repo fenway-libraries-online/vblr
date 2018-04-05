@@ -1,2 +1,3 @@
-PREFIX = /site
-VBLR_ROOT = /site/marc/helm/proj
+ILS = koha
+PREFIX = /usr/local/vblr
+ROOT = /var/local/vblr
