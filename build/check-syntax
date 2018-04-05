@@ -1,36 +1,36 @@
-#!/bin/zsh
+#!/bin/sh
 
-integer err=0
+err=0
 
-print 'Checking scripts...' >&2
+echo 'Checking scripts...' >&2
 main() {
     for f in $@; do
         case "$(head -n1 < $f)" in
-            (*zsh*)  check-zsh $f  ;;
-            (*perl*) check-perl $f ;;
-            (*sh*)   check-sh $f   ;;
-            (*)      fatal "unknown file type: $f" ;;
+            *zsh*)  check_zsh $f  ;;
+            *perl*) check_perl $f ;;
+            *sh*)   check_sh $f   ;;
+            *)      fatal "unknown file type: $f" ;;
         esac
     done
-    if (( err == 0 )); then
-        print 'The scripts all look good' >&2
-        print >&2
+    if [ $err = 0 ]; then
+        echo 'The scripts all look good' >&2
+        echo >&2
     else
-        print 'There was a problem' >&2
+        echo 'There was a problem' >&2
         exit $err
     fi
 }
 
 ok() {
-    print " ok  $1" >&2
+    echo " ok  $1" >&2
 }
 
 fail() {
-    print "FAIL $1" >&2
+    echo "FAIL $1" >&2
     err=1
 }
 
-check-perl() {
+check_perl() {
     if perl -c $1 2>&1 | fgrep -iq error; then
         fail $1
     else
@@ -38,7 +38,7 @@ check-perl() {
     fi
 }
 
-check-zsh() {
+check_zsh() {
     if zsh -n $1 > /dev/null 2>&1; then
         ok $1
     else
@@ -46,7 +46,7 @@ check-zsh() {
     fi
 }
 
-check-sh() {
+check_sh() {
     if sh -n $1 > /dev/null 2>&1; then
         ok $1
     else
@@ -55,7 +55,7 @@ check-sh() {
 }
 
 fatal() {
-    print "fatal error: $*" >&2
+    echo "fatal error: $*" >&2
     exit 2
 }
 

@@ -12,10 +12,11 @@ install: check install-for-$(ILS)
 	@echo Installing for $(ILS)
 
 install-for-koha: install-vblr koha/bin/ils.load
-	rsync -av koha/bin/ $(ROOT)/bin/
+	@build/make-root $(ILS) $(ROOT)
+	cp -R koha/bin $(ROOT)/
 
 install-for-voyager: install-vblr voyager/bin/ils.load
-	rsync -av voyager/bin/ $(ROOT)/bin/
+	@build/make-root $(ILS) $(ROOT)
 
 install-vblr: vblr
 	install -d $(PREFIX)/bin
