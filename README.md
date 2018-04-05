@@ -1,4 +1,4 @@
 vblr
 ----
 
-Voyager ILS batchload manager
+Batchload manager for Voyager and Koha ILSes
