@@ -6,7 +6,7 @@ all: check
 
 check:
 	@echo 'Checking scripts...' >&2
-	@./check-syntax $(scripts)
+	@build/check-syntax $(scripts)
 
 install: check install-for-$(ILS)
 	@echo Installing for $(ILS)
