@@ -23,6 +23,7 @@ use YAML;
 use IO::Handle;
 use Text::Glob qw(glob_to_regex);
 use Text::ParseWords qw(shellwords quotewords);
+use String::ShellQuote qw(shell_quote);
 use DB_File;
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
@@ -2700,11 +2701,6 @@ sub load_batch {
     else {
         $arg{'profile'} = $profile;
     }
-    my @cmd = ('ils.load', map { sprintf("%s=%s", $_, $arg{$_}) } sort keys %arg);
-    if ($opt{'dry_run'}) {
-        print STDERR join(' ', 'command:', @cmd), "\n";
-        return;
-    }
     my $jfile = "$jdir/job.kv";
     my $job;
     if ($staged_job) {
@@ -2713,7 +2709,7 @@ sub load_batch {
         $job->{'date'} = $now;
     }
     else {
-        mkjob($u, $b, $j);
+        mkjob($u, $b, $j) if !$opt{'dry_run'};
         $job = {
             'code' => $j,
             'date' => $now,
@@ -2723,8 +2719,13 @@ sub load_batch {
             'interleaved' => $interleaved,
         };
     }
-    wrkvfile($jfile, $job);
     my $cmd = which('ils.load', %$job, %arg) or fatal "cannot find ils.load";
+    my @cmd = ($cmd, map { sprintf("%s=%s", $_, $arg{$_}) } sort keys %arg);
+    if ($opt{'dry_run'}) {
+        print STDERR join(' ', 'command:', shell_quote(@cmd)), "\n";
+        return;
+    }
+    wrkvfile($jfile, $job);
     wrstatus($jdir, LOADING);
     my ($err, $out) = run($cmd, 'args' => [kvparams(%$job, %arg)], 'env' => {envparams(%$job, %arg)});
     run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose);
