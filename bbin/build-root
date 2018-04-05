@@ -1,6 +1,16 @@
 #!/bin/sh
 
 ILS=$1
+ROOT=$2
 
-mkdir -p build/root
-cp -R ./$ILS/* build/root/
+case "$ILS" in
+    '') exit 1 ;;
+esac
+
+case "$ROOT" in
+    '') exit 1 ;;
+     /) exit 1 ;;
+esac
+
+mkdir -p $ROOT
+cp -n -R ./$ILS/* $ROOT

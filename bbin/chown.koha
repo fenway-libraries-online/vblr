@@ -1,0 +1,5 @@
+#!/bin/sh
+
+ROOT=$1
+
+chown -R $(awk '/^koha-user / {print $2}' ./$ROOT/root.kv) ./$ROOT/*

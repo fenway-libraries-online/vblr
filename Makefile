@@ -15,18 +15,22 @@ config.mk:
 	./configure
 
 root: build/root/root.kv
-	@bbin/build-root $(ILS)
+	@bbin/build-root $(ILS) build/root
+	@bbin/chown.$(ILS) build/root
 
-build/root/root.kv:
-	@mkdir -p build/root
+build/root/root.kv: build/root
 	@bbin/configure.$(ILS) > $@
 
+build/root:
+	@mkdir -p build/root
+	
 check:
 	@bbin/check-syntax $(scripts)
 	@bbin/check-prereqs $(ILS)
 
 install-vblr: vblr
 	@echo Installing vblr and vbdb
+	install -d $(PREFIX)
 	install -d $(PREFIX)/bin
 	install vblr $(PREFIX)/bin/
 	install vbdb $(PREFIX)/bin/
