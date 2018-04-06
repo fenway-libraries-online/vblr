@@ -4044,7 +4044,7 @@ sub add {
             'count' => $count,
         );
         aplast($verb, update => $u);
-        run_hook('added', update => $u, file => "$udir/$filename", purpose => $purpose);
+        run_hook('added', update => $u, file => $filename, purpose => $purpose);
     }
     $ucur = $u, undef $bcur if %shell;
     return $count;
