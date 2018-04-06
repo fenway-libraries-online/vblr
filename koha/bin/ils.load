@@ -234,7 +234,7 @@ sub load_biblio {
         $bib_action = $batch->{'overlay_action'};
     }
     elsif ($batch->{'nomatch_action'} eq IGNORE) {
-        print $fhlog "$n\nB unm $biblionumber\n";
+        print $fhlog "$n\nB unm\n";
         $bib_action = IGNORE;
     }
     else {
