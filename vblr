@@ -294,6 +294,7 @@ sub cmd_init {
     wrstatus('.', NEW);
     aplast('init');
     aplog('init', result => OK);
+    run_hook('inited');
 }
 
 sub cmd_base {
