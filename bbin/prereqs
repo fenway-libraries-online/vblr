@@ -1,6 +1,12 @@
-### Don't change anything below this line ###
-### It was generated automatically        ###
+#!/bin/sh
 
+### Don't edit this file; it's generated automatically
+
+ILS=$1
+ROOT=$2
+
+# Perl modules that vblr itself needs
+cat <<EOS
 perlmod Cwd
 
 perlmod DB_File
@@ -39,3 +45,18 @@ perlmod Time::HiRes
 
 perlmod YAML
 
+EOS
+
+# Scripts that vblr calls
+cat <<EOS
+script marcn
+
+script marcdiag
+
+EOS
+
+# Perl modules that those scripts require
+cat <<EOS
+perlmod MARC::Loop
+
+EOS

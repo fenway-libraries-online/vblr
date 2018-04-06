@@ -1,5 +1,88 @@
-#!/bin/sh
+#!/usr/bin/perl
 
-ILS=$1
+use strict;
+use warnings;
 
-bbin/check-perl-modules $ILS
+use lib "$ARGV[-1]/lib";
+
+delete $ENV{'PERL5LIB'};
+
+my ($what, $ILS, $PREFIX) = @ARGV;
+my $whats = $what . 's';
+my @failed;
+
+my @PATH = unique((split /:/, ($ENV{'PATH'} || '/usr/bin:/bin')), "$PREFIX/bin");
+
+my %what2human = (
+    'script' => 'script',
+    'scripts' => 'scripts',
+    'perlmod' => 'Perl module',
+    'perlmods' => 'Perl modules',
+);
+my $human = $what2human{$what};
+my $humans = $what2human{$whats};
+
+open STDIN, '-|', 'bbin/prereqs' or die "exec bbin/prereqs: $!";
+print STDERR "Checking required $what2human{$whats}...\n";
+$/ = '';
+while (<STDIN>) {
+    s/^\s*#.+\n//mg;
+    next if !s/^$what // && !s/^$what.$ILS //;
+    my ($name, @etc) = split /\n/;
+    my $ok = (__PACKAGE__->can('check_'.$what) || die)->($name, @etc);
+    if ($ok) {
+        print STDERR " ok  $name\n";
+    }
+    else {
+        print STDERR "FAIL $name -- missing\n";
+        push @failed, [$name, @etc];
+    }
+}
+
+sub check_perlmod {
+    my ($name) = @_;
+    eval { eval "use $name; 1" };
+}
+
+sub check_script {
+    my ($name) = @_;
+    foreach (split /:/, ($ENV{'PATH'} || '/usr/bin:/bin')) {
+        return 1 if -x "$_/$name" && !-d _;
+    }
+    return 0;
+}
+
+if (@failed) {
+    my $n = @failed;
+    if (open my $fh, '>', 'build/missing') {
+        foreach my $thing (@failed) {
+            print $fh $_, "\n" for @$thing;
+        }
+        print $fh "\n";
+    }
+    if (@failed == 1) {
+        print STDERR "You are missing 1 $human.  I can install this for you.\n";
+    }
+    else {
+        print STDERR "You are missing $n $humans.  I can install these for you.\n";
+    }
+}
+else {
+    print STDERR "You have all the required $whats.\n";
+    print STDERR "\n";
+    exit 0;
+}
+
+foreach my $name (@failed) {
+    1;
+}
+
+exit 1;
+
+sub unique {
+    my (@unique, %seen);
+    foreach (@_) {
+        push @unique, $_ if !$seen{$_}++;
+    }
+    return @unique;
+}
