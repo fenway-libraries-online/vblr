@@ -34,9 +34,7 @@ build/root:
 	@mkdir -p build/root
 	
 check:
-	@bbin/check-syntax $(scripts)
-	@PERL5LIB= bbin/check-prereqs perlmod $(ILS) $(PREFIX)
-	@bbin/check-prereqs script $(ILS) $(PREFIX)
+	@bbin/check-all $(ILS) $(PREFIX) $(scripts)
 
 install-vblr: vblr
 	@echo Installing vblr and vbdb

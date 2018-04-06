@@ -53,6 +53,8 @@ script marcn
 
 script marcdiag
 
+script pfr
+
 EOS
 
 # Perl modules that those scripts require

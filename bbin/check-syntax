@@ -2,7 +2,7 @@
 
 err=0
 
-echo 'Checking scripts...' >&2
+echo 'Checking syntax of all included scripts' >&2
 main() {
     for f in $@; do
         case "$(head -n1 < $f)" in

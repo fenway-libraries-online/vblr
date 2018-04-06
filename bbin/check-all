@@ -1,0 +1,13 @@
+#!/bin/sh
+
+ILS=$1
+PREFIX=$2
+shift 2
+
+err=0
+
+bbin/check-syntax $scripts || err=1
+PERL5LIB= bbin/check-prereqs perlmod $ILS $PREFIX || err=1
+bbin/check-prereqs script $ILS $PREFIX || err=1
+
+exit $err
