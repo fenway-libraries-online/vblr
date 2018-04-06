@@ -13,4 +13,5 @@ case "$ROOT" in
 esac
 
 mkdir -p $ROOT
+cp -n -R ./base/* $ROOT
 cp -n -R ./$ILS/* $ROOT

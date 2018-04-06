@@ -3,6 +3,9 @@ include config.mk
 scripts = vblr vbdb $(ILS)/bin/*
 
 build: configure check root
+	@echo "Ready to install:"
+	@echo "* vblr will be installed in $(PREFIX)/bin"
+	@echo "* Data files will be installed in $(ROOT)"
 
 clean:
 	rm -Rf build
@@ -38,6 +41,7 @@ install-vblr: vblr
 	@echo Installing vblr and vbdb
 	install -d $(PREFIX)
 	install -d $(PREFIX)/bin
+	install -d $(PREFIX)/lib
 	install vblr $(PREFIX)/bin/
 	install vbdb $(PREFIX)/bin/
 
