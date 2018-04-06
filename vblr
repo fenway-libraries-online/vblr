@@ -5,7 +5,10 @@ use warnings;
 
 use vars qw($VERSION);
 
-$VERSION = q(1.201);
+$VERSION = q(2.001);
+
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib";
 
 use String::Expando;
 use File::Kvpar;
