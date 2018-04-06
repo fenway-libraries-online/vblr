@@ -4,6 +4,12 @@ scripts = vblr vbdb $(ILS)/bin/*
 
 build: configure check root
 
+clean:
+	rm -Rf build
+
+unconfigure: clean
+	rm -f config.mk
+
 install: build install-vblr
 	@echo Installing root for $(ILS)
 	install -d $(ROOT)
@@ -35,4 +41,4 @@ install-vblr: vblr
 	install vblr $(PREFIX)/bin/
 	install vbdb $(PREFIX)/bin/
 
-.PHONY: all configure check build root install install-vblr
+.PHONY: all configure clean unconfigure check build root install install-vblr
