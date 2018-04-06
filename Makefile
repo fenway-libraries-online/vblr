@@ -16,7 +16,7 @@ unconfigure: clean
 install: build install-vblr
 	@echo Installing root for $(ILS)
 	install -d $(ROOT)
-	cp -R build/root/* $(ROOT)/
+	cp -p -R build/root/* $(ROOT)/
 
 configure: config.mk
 
@@ -34,7 +34,7 @@ build/root:
 	@mkdir -p build/root
 	
 check:
-	@bbin/check-all $(ILS) $(PREFIX) $(scripts)
+	@bbin/check-all $(ILS) $(PREFIX) build/root $(scripts)
 
 install-vblr: vblr
 	@echo Installing vblr and vbdb
