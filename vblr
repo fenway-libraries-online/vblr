@@ -2678,7 +2678,7 @@ sub load_batch {
     }
     my $profile = $conf->{'profile'};
     fatal "No load profile configured" if !defined($profile) && !$update_mfhds;
-    my $j = $staged_job || mkjobid();
+    my $j = $dry_run ? 'jxxxxxxxxx' : $staged_job || mkjobid();
     my $jdir = "$bdir/jobs/$j";
     my $file = "$bdir/jobs/$j/records.mrc";
     my %arg = (
