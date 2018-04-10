@@ -373,7 +373,7 @@ sub cmd_add {
         @opt{qw(file update)} = ($file, $u);
         add(%opt);
         @updates = ($u);
-        autoload($u, \%opt) if $opt{'autoload'};
+        autoload($u, %opt) if $opt{'autoload'};
     }
     if ($opt{'quiet'}) {
         ::exit -1 if !@updates;
@@ -2689,6 +2689,7 @@ sub load_batch {
         'purpose' => $purpose,
         'file' => $file,
     );
+    $arg{'dry-run'} = 1 if $dry_run;
     $arg{'opt-keyword-index'} = 1 if $opt{'keyword_index'};
     if (@delete) {
         $arg{'opt-strict'} = 0;
@@ -2707,6 +2708,7 @@ sub load_batch {
     }
     my $jfile = "$jdir/job.kv";
     my $job;
+    my $log = $arg{'log'} = "$jdir/output/$j.log";
     if ($staged_job) {
         fatal "no such staged job: $staged_job" if !-e $jfile;
         $job = rdkvfile($jfile);
@@ -2731,7 +2733,6 @@ sub load_batch {
     }
     wrkvfile($jfile, $job);
     wrstatus($jdir, LOADING);
-    my $log = $arg{'log'} = "$jdir/output/$j.log";
     run_hook('loading', update => $u, batch => $b, job => $j, purpose => $purpose, log => $log);
     my ($err, $out) = run($cmd, 'args' => [kvparams(%$job, %arg)], 'env' => {envparams(%$job, %arg)});
     my @results = load_results($log);
@@ -2792,7 +2793,8 @@ sub load_batch {
             cmd_mkhtml();
         }
         mkdrops($j) if $job->{'discard'} > 0;
-        run_hook('loaded', update => $u, batch => $b, job => $j, purpose => $purpose, log => $log);
+        run_hook('loaded', update => $u, file => $update->{'source'}, batch => $b, job => $j, purpose => $purpose, log => $log);
+        # run_hook('added', update => $u, file => "$pdir/$udir/$filename", purpose => $purpose);
     }
 }
 
