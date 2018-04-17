@@ -223,10 +223,11 @@ $sub->();
 sub cmd_init {
     #@ init [-r SET] [-p PROTO] [-m DESC] [DIR] :: Begin a vblr project
     my ($recset, $descrip);
-    my $freq = ONGOING;
+    my $freq;
     my $proto = 'default';
     GetOptions(
         '1|one-time'      => sub { $freq = ONETIME },
+        'f|frequency=s'   => \$freq,
         'r|record-set=s'  => \$recset,
         'p|prototype=s'   => \$proto,
         'm|description=s' => \$descrip,
@@ -264,7 +265,7 @@ sub cmd_init {
     fatal "No such prototype: $proto" if ! -e $proto_dir;
     fatal "Not a prototype: $proto" if ! -e "$proto_dir/prototype.kv";
     ask $descrip, 'Project description: ' if !defined $descrip;
-    ask $freq,    'Project frequency: ';
+    ask $freq,    'Project frequency: ' if !defined $freq;
     my $pid;
     do { $pid = mkid('p') } while defined idval($pid);
     idval($pid => "$pcode");
@@ -2785,7 +2786,8 @@ sub load_batch {
         aplast('load', update => $u, batch => $b, job => $j);
         apnext('finish', update => $u, batch => $b);
         if ($opt{'autogen_loaded'}) {
-            open my $fh, '-|', 'vjobget', $j or fatal "Can't run vjobget: $!";
+            my $cmd = which('ils.jobget', %$job, %arg) or fatal "cannot find ils.jobget";
+            open my $fh, '-|', $cmd, "job=$j" or fatal "Can't run ils.jobget $!";
             copy($fh, "$jdir/loaded.mrc");
         }
         if ($opt{'gen_html'} && $n <= 5000) {
