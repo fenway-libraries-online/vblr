@@ -2644,6 +2644,7 @@ sub load_batch {
     }
     my $udir = "updates/$u";
     my $bdir = "$udir/batches/$b";
+    my $source_file = files("$udir/*.mrc");
     fatal "No such batch: $u $b" if ! -e $bdir;
     fatal "Batch not prepared: $u $b" if rdstatus($bdir) ne PREPARED;
     my ($cfile) = find('conf/load.kv', $bdir, $udir, '.');
@@ -2690,6 +2691,7 @@ sub load_batch {
         'job' => $j,
         'purpose' => $purpose,
         'file' => $file,
+        'source_file' => $source_file,
     );
     $arg{'dry-run'} = 1 if $dry_run;
     $arg{'opt-keyword-index'} = 1 if $opt{'keyword_index'};
@@ -4355,7 +4357,7 @@ sub cmd_iddb {
         'B|brief'     => \$brief,
         'p|projects' => sub { $type{'p'} = 1 },
         'j|jobs'     => sub { $type{'j'} = 1 },
-        'a|all'      => sub { $type{'p'} = $type{'j'} = 1 },
+        'a|all'      => sub { %type = map { $_ => 1 } qw(p j f F) },
         'c|create'   => \$create,
         'v|verbose' => \$verbose,
         'd|deref'   => \$deref,
