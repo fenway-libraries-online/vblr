@@ -180,7 +180,7 @@ sub exit;
 sub ask(\$$;$);
 sub askbool($);
 
-my $root = $ENV{'VBLR_ROOT'} || "$ENV{HOME}/proj";
+my $root = $ENV{'VBLR_ROOT'};
 my $pdir;  # Path to the current project (e.g., ~/proj/ecl/afso)
 my $gcur;  # Name of the current group (i.e., institution)
 my $pcur;  # Name of the current project (e.g., ecl/afso)
@@ -201,6 +201,7 @@ GetOptions(
     'p|project=s' => \$pdir,
 ) or usage_commands;
 
+$root ||= find_root(getcwd, "$ENV{HOME}/proj");
 if (-r "$root/conf/env.kv") {
     my $env = rdkvfile("$root/conf/env.kv");
     while (my ($k, $v) = each %$env) {
@@ -1745,7 +1746,7 @@ sub find_marc {
     if (defined $b) {
         @files = glob("updates/$u/batches/$b/*/records.mrc");
         if (!@files) {
-            @files = glob("updates/$u/batches/$b/jobs/*/loaded.mrc");
+            @files = glob("updates/$u/batches/$b/jobs/*/records.mrc");
             fatal "Multiple jobs for update $u batch $b" if @files > 1;
             if (!@files) {
                 fatal "No update $u"             if ! -e "updates/$u";
@@ -3383,6 +3384,15 @@ sub orient {
     else {
         my $version = rdkvfile('vblr.kv')->{'version'};
         check_version_compatibility($version);
+    }
+}
+
+sub find_root {
+    foreach my $dir (@_) {
+        while (1) {
+            return $dir if -e "$dir/root.kv";
+            $dir =~ s{/[^/]+$}{} or last;
+        }
     }
 }
 
