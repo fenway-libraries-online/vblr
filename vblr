@@ -40,11 +40,13 @@ use constant DISCARD => 'discard';
 use constant UNRESOLVED => 'unresolved';
 use constant UNMATCHED  => 'unmatched';
 use constant MATCH   => 'match';
+use constant MERGE   => 'merge';
 
 my %purpose2human = (
     ADD() => 'add records',
     DELETE() => 'delete records',
     REPLACE() => 'replace records',
+    MERGE() => 'merge records',
 );
 
 # Record type
@@ -351,6 +353,7 @@ sub cmd_add {
                 = /^a(?:dd)$/      ? ADD
                 : /^r(?:eplace)?$/ ? REPLACE
                 : /^d(?:elete)?$/  ? DELETE
+                : /^m(erge)?$/     ? MERGE
                 : usage;
         },
         'C|copy'          => \$opt{'copy'},
@@ -2772,6 +2775,7 @@ sub load_batch {
     $job->{'match'}   = $num{MATCH()}  || 0;
     $job->{'delete'}  = $num{DELETE()} || 0;
     $job->{'replace'} = $num{REPLACE()} || 0;
+    $job->{'merge'}   = $num{MERGE()}  || 0;
     $job->{'discard'} = ($num{DISCARD()} || 0) + ($num{UNRESOLVED()} || 0) + ($num{UNMATCHED()} || 0);
     wrkvfile("$jdir/job.kv", $job);
     aplog('load',
@@ -3027,6 +3031,7 @@ sub cmd_purpose {
         print STDERR "vblr: warning: Update purpose not specified: $u\n";
         $purpose = ($u =~ /replace/i) ? REPLACE
                  : ($u =~ /del/i    ) ? DELETE
+                 : ($u =~ /merge/i  ) ? MERGE
                  : ADD;
     }
     print join(' ', @pfx, $purpose), "\n";
