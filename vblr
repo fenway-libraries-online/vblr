@@ -1166,8 +1166,11 @@ sub remove_batch {
 
 sub remove_update {
     my ($u) = @_;
-    foreach my $b (batches($u)) {
-        remove_batch($u, $b);
+    my $status = rdstatus("updates/$u");
+    if ($status ne ARCHIVED) {
+        foreach my $b (batches($u)) {
+            remove_batch($u, $b);
+        }
     }
     my $dir = 'updates';
     wrlist($dir, grep { $_ ne $u } rdlist($dir));
@@ -1194,10 +1197,9 @@ sub cmd_rm {
         :      ('update' => $u, 'updates')
         ;
     my $status = rdstatus("$dir/$o");
+    my %allowed = map { $_ => 1 } (NEW, ERROR, PREPARED, ARCHIVED);
     fatal "Can't remove $t $o: status"
-        if $status ne NEW
-        && $status ne ERROR
-        && $status ne PREPARED
+        if !$allowed{$status}
         && !$force;
     $force or askbool "Delete $t $o? " or fatal 'Cancelled';
     if (defined $j) {
@@ -1440,9 +1442,10 @@ sub infer_update_and_batch {
 
 sub cmd_results {
     #@ results [-v] [UPDATE [BATCH] | -L | -j JOB...] :: Show record load results
-    my ($verbose, $jobs, %tally);
+    my ($details, $verbose, $jobs, %tally);
     @ARGV = qw(-L) if !@ARGV;
     GetOptions(
+        'd|details' => \$details,
         'v|verbose' => \$verbose,
         'j|jobs' => \$jobs,
         'L' => sub { push @ARGV, '-j', 'last' },
@@ -1452,6 +1455,7 @@ sub cmd_results {
             $tally{$type}{$action} = 1;
         },
     ) or usage;
+    $details = 1 if $verbose;
     my @jobs;
     if ($jobs) {
         # vblr results -j JOBID...
@@ -1488,7 +1492,7 @@ sub cmd_results {
             } @results;
         }
         $num{"$_->{'type'} $_->{'action'}"}++ for @results;
-        next if !$verbose;
+        next if !$details;
         my $g = 0;
         while (@results) {
             my $rec = shift @results;
@@ -1513,7 +1517,7 @@ sub cmd_results {
         $n += $_ for values %num;
         print $n, "\n";
     }
-    else {
+    if ($verbose) {
         printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
     }
 }
