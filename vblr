@@ -1512,7 +1512,7 @@ sub cmd_results {
         print "\n";
     }
     $num{'dup'} = scalar grep { $_ > 1 } values %dup if $verbose;
-    print STDERR "Load results:\n" if $verbose;
+    print STDERR "Load results:\n" if $verbose || $summary;
     if (%tally) {
         my $n = 0;
         $n += $_ for values %num;
