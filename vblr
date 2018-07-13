@@ -1441,11 +1441,12 @@ sub infer_update_and_batch {
 }
 
 sub cmd_results {
-    #@ results [-v] [UPDATE [BATCH] | -L | -j JOB...] :: Show record load results
-    my ($details, $verbose, $jobs, %tally);
+    #@ results [-dsv] [-t TYPE[:ACTION]] [UPDATE [BATCH] | -L | -j JOB...] :: Show record load results
+    my ($details, $verbose, $summary, $jobs, %tally);
     @ARGV = qw(-L) if !@ARGV;
     GetOptions(
         'd|details' => \$details,
+        's|summary' => \$summary,
         'v|verbose' => \$verbose,
         'j|jobs' => \$jobs,
         'L' => sub { push @ARGV, '-j', 'last' },
@@ -1455,7 +1456,7 @@ sub cmd_results {
             $tally{$type}{$action} = 1;
         },
     ) or usage;
-    $details = 1 if $verbose;
+    $details = $summary = 1 if $verbose;
     my @jobs;
     if ($jobs) {
         # vblr results -j JOBID...
@@ -1517,7 +1518,7 @@ sub cmd_results {
         $n += $_ for values %num;
         print $n, "\n";
     }
-    if ($verbose) {
+    if ($summary) {
         printf STDERR "%d %s\n", $num{$_}, $_ for sort keys %num;
     }
 }
