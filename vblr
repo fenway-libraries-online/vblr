@@ -192,6 +192,8 @@ my $bcur;  # Name of the current batch (if yadda yadda)
 my $project;
 my $interactive = -t STDIN && -t STDOUT && -t STDERR;
 my %shell;
+my (%command, %hook);
+my (%plugin, %plugin_hook, %plugin_command);
 
 my $now = strftime(TIMESTAMP, localtime);
 my $expando = String::Expando->new(
@@ -211,13 +213,16 @@ if (-r "$root/conf/env.kv") {
     }
 }
 
+my $app = init_app();
+init_plugins();
+
 my %skip_orient = map { $_ => 1 } qw( init help version root projects group groups www iddb which shell );
 my %iddb;
 
 @ARGV = qw(shell) if !@ARGV;
 my $cmd = shift @ARGV;
 $cmd =~ tr/-/_/;
-my $sub = __PACKAGE__->can("cmd_$cmd") || usage_commands;
+my $sub = $command{$cmd} ||= __PACKAGE__->can("cmd_$cmd") || usage_commands;
 orient() if !$skip_orient{$cmd};
 $sub->();
 
@@ -3397,6 +3402,58 @@ sub orient {
     }
 }
 
+sub init_app {
+    return App::vblr->new;  # TODO
+}
+
+sub init_plugins {
+    foreach my $f (glob "$root/plugin/*.pm") {
+        warning("invalid plugin file name: $f"), next
+            if $f !~ m{/([a-z]+)\.pm$};
+        my ($key, $cls) = ($1, "App::vblr::Plugin::$1");
+        my $ok = eval {
+            require $f;
+            my $cons = $cls->can('new') or die 'no constructor defined';
+            my $conf = "$root/conf/plugin/$key.kv";
+            my $plugin = $cons->(
+                $cls,
+                %{ -e $conf ? rdkvfile($conf) : {} },
+                'root' => $root,
+                'vblr' => undef,  # TODO
+            );
+            my $hash = eval "\\%${cls}::";
+            while (my ($m, $code) = each %$hash) {
+                if ($m =~ /^hook_([a-z]+)/) {
+                    my $hook = $1;
+                    my $stage = 'after';
+                    $stage = $1 if $hook =~ s/^(before|after)_//;
+                    push @{ $hook{$hook}{$stage} ||= [] }, sub {
+                        $code->($plugin, @_);
+                    };
+                }
+            }
+            if (main->can('cmd_' . $key)) {
+                warning "plugin $key overrides built-in command";
+            }
+            if ($plugin->can('cmd')) {
+                $command{$key} = sub {
+                    $plugin->cmd(@_);
+                };
+            }
+            else {
+                $command{$key} = sub {
+                    my ($subcmd, @args) = @_;
+                    my $code = $plugin->can('cmd_' . $subcmd);
+                    $plugin->usage, ::exit 1 if !$code;
+                    $code->($plugin, @_);
+                };
+            }
+            1;  # OK
+        };
+        fatal "can't load plugin $key: ", (split /\n/, $@)[0] if !$ok;
+    }
+}
+
 sub find_root {
     foreach my $dir (@_) {
         while (1) {
@@ -5277,5 +5334,16 @@ sub expand_env {
     s{\$([A-Z0-9_]+)|\${([A-Z0-9_]+)}}{$ENV{$1 // $2} // ''}eg;
     return $_;
 }
+
+# --- vblr app class
+
+package App::vblr;
+
+sub new {
+    my $cls = shift;
+    bless { @_ }, $cls;
+}
+
+sub root { $root }
 
 # vim:set nu:
