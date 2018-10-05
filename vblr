@@ -213,11 +213,11 @@ if (-r "$root/conf/env.kv") {
     }
 }
 
-my $app = init_app();
-init_plugins();
-
 my %skip_orient = map { $_ => 1 } qw( init help version root projects group groups www iddb which shell );
 my %iddb;
+
+my $app = init_app();
+init_plugins();
 
 @ARGV = qw(shell) if !@ARGV;
 my $cmd = shift @ARGV;
@@ -3437,17 +3437,20 @@ sub init_plugins {
             }
             if ($plugin->can('cmd')) {
                 $command{$key} = sub {
-                    $plugin->cmd(@_);
+                    $plugin->cmd(@ARGV);
                 };
             }
             else {
+                my %subcmd;
                 $command{$key} = sub {
-                    my ($subcmd, @args) = @_;
-                    my $code = $plugin->can('cmd_' . $subcmd);
+                    $plugin->usage, ::exit 1 if !@ARGV;
+                    my ($subcmd, @args) = @ARGV;
+                    my $code = $subcmd{$subcmd} ||= $plugin->can('cmd_' . $subcmd);
                     $plugin->usage, ::exit 1 if !$code;
-                    $code->($plugin, @_);
+                    $code->($plugin, @args);
                 };
             }
+            $skip_orient{$key} = 1 if eval { $plugin->skip_orient };
             1;  # OK
         };
         fatal "can't load plugin $key: ", (split /\n/, $@)[0] if !$ok;
