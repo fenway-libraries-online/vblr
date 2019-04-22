@@ -1630,6 +1630,7 @@ sub cmd_match {
         'update' => $u,
         'batch' => $b,
         'job' => $j,
+        'file' => $files[0],
         'record_type' => $rectype,
         'profile' => $profile,
     );
@@ -2579,7 +2580,7 @@ sub load_staged_job {
 
 sub kvparams {
     my %arg = @_;
-    return map { join '=', $_, $arg{$_} } sort keys %arg;
+    return map { join '=', $_, defined $arg{$_} ? $arg{$_} : '' } sort keys %arg;
 }
 
 sub envparams {
@@ -3011,6 +3012,10 @@ sub run_hook {
     my ($hook, %arg) = @_;
     my @where = ($root, $pdir);
     my ($u, $b, $j) = @arg{qw(update batch job)};
+    foreach my $sub (@{ $hook{$hook}{'before'} || [] }) {
+        my $ok = eval { $sub->('hook' => $hook, 'stage' => 'before', %arg); 1 };
+        last if !$ok;
+    }
     if (defined $u) {
         push @where, my $udir = "$pdir/updates/$u";
         push @where, "$udir/batches/$b"         if defined $b;
@@ -3025,6 +3030,10 @@ sub run_hook {
             $ENV{'VBLR_'.uc($k)} = $v if defined $v;
         }
         system($f);
+    }
+    foreach my $sub (@{ $hook{$hook}{'after'} || [] }) {
+        my $ok = eval { $sub->('hook' => $hook, 'stage' => 'after', %arg); 1 };
+        last if !$ok;
     }
 }
 
@@ -3407,26 +3416,34 @@ sub init_app {
 }
 
 sub init_plugins {
-    foreach my $f (glob "$root/plugin/*.pm") {
+    foreach my $f (glob "$root/plugins/*.pm") {
         warning("invalid plugin file name: $f"), next
-            if $f !~ m{/([a-z]+)\.pm$};
+            if $f !~ m{/([a-z_]+)\.pm$};
         my ($key, $cls) = ($1, "App::vblr::Plugin::$1");
+        # Plugin source file foo_bar.pm -> command foo-bar
+        $key =~ tr/_/-/;
         my $ok = eval {
-            require $f;
-            my $cons = $cls->can('new') or die 'no constructor defined';
-            my $conf = "$root/conf/plugin/$key.kv";
+            die $@ || $! if !eval qq{
+                package $cls;
+                do \$f;
+            };
+            my $cons = $cls->can('new') || sub {
+                my $cls = shift;
+                bless { @_ }, $cls;
+            };
+            my $conf = "$root/conf/plugins/$key.kv";
             my $plugin = $cons->(
                 $cls,
                 %{ -e $conf ? rdkvfile($conf) : {} },
                 'root' => $root,
-                'vblr' => undef,  # TODO
+                'vblr' => $app,
             );
             my $hash = eval "\\%${cls}::";
             while (my ($m, $code) = each %$hash) {
-                if ($m =~ /^hook_([a-z]+)/) {
-                    my $hook = $1;
-                    my $stage = 'after';
-                    $stage = $1 if $hook =~ s/^(before|after)_//;
+                if ($m =~ /^hook_(?:(before|after)_)?([a-z_]+)$/) {
+                    my $stage = $1 || 'after';
+                    my $hook = $2;
+                    $hook =~ tr/_/-/;  # In case we ever define a hook with a hyphen in it
                     push @{ $hook{$hook}{$stage} ||= [] }, sub {
                         $code->($plugin, @_);
                     };
@@ -3440,7 +3457,7 @@ sub init_plugins {
                     $plugin->cmd(@ARGV);
                 };
             }
-            else {
+            elsif (grep { /^cmd_/ } keys %$hash) {
                 my %subcmd;
                 $command{$key} = sub {
                     $plugin->usage, ::exit 1 if !@ARGV;
@@ -3450,10 +3467,13 @@ sub init_plugins {
                     $code->($plugin, @args);
                 };
             }
+            else {
+                # Hook(s) only
+            }
             $skip_orient{$key} = 1 if eval { $plugin->skip_orient };
             1;  # OK
         };
-        fatal "can't load plugin $key: ", (split /\n/, $@)[0] if !$ok;
+        fatal "can't load plugin $f: ", (split /\n/, $@)[0] if !$ok;
     }
 }
 
@@ -4560,7 +4580,7 @@ sub cmd_shell {
         no warnings 'redefine';
         foreach my $cmd (keys %skip_orient) {
             next if $cmd eq 'shell';
-            my $sub = __PACKAGE__->can("cmd_$cmd");
+            my $sub = $command{$cmd} ||= __PACKAGE__->can("cmd_$cmd");
             *{"shellcmd_$cmd"} = sub {
                 my $cwd = getcwd;
                 $sub->();
@@ -4600,7 +4620,7 @@ sub cmd_shell {
         }
         my $sub = __PACKAGE__->can("shellcmd_$cmd");
         if (!$sub) {
-            $sub = __PACKAGE__->can("cmd_$cmd");
+            $sub = $command{$cmd} ||= __PACKAGE__->can("cmd_$cmd");
             if ($sub && !defined $pcur && !$skip_orient{$cmd}) {
                 print "you can't run that command outside of a project\n";
                 next;
