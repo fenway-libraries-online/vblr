@@ -356,7 +356,7 @@ sub cmd_add {
         @opt{qw(file update)} = ($file, $u);
         add(%opt);
         @updates = ($u);
-        autoload($u, \%opt) if $opt{'autoload'};
+        autoload($u, %opt) if $opt{'autoload'};
     }
     if ($opt{'quiet'}) {
         ::exit -1 if !@updates;
@@ -1111,8 +1111,11 @@ sub remove_batch {
 
 sub remove_update {
     my ($u) = @_;
-    foreach my $b (batches($u)) {
-        remove_batch($u, $b);
+    my $status = rdstatus("updates/$u");
+    if ($status ne ARCHIVED) {
+        foreach my $b (batches($u)) {
+            remove_batch($u, $b);
+        }
     }
     my $dir = 'updates';
     wrlist($dir, grep { $_ ne $u } rdlist($dir));
@@ -1139,10 +1142,9 @@ sub cmd_rm {
         :      ('update' => $u, 'updates')
         ;
     my $status = rdstatus("$dir/$o");
+    my %allowed = map { $_ => 1 } (NEW, ERROR, PREPARED, ARCHIVED);
     fatal "Can't remove $t $o: status"
-        if $status ne NEW
-        && $status ne ERROR
-        && $status ne PREPARED
+        if !$allowed{$status}
         && !$force;
     $force or askbool "Delete $t $o? " or fatal 'Cancelled';
     if (defined $j) {
@@ -4481,79 +4483,6 @@ sub shellcmd_cd {
     print getcwd, "\n";
 }
 
-sub shellcmd_receive {
-    #@shell receive [TOKEN|DIR|URL]
-    usage if @ARGV > 1;
-    if (!@ARGV) {
-        my %request = map {
-            my $rqfile = $_;
-            my $rqdir = dirname($rqfile);
-            my $token = basename($rqdir);
-            my $request = rdkvfile($rqfile);
-            my @mrc = glob("$rqdir/*.mrc");
-            $request->{'file'} = $rqfile;
-            $request->{'marccount'} = sum(map { count($_) } @mrc);
-            ($token => $request)
-        } glob("$root/inbox/*/request.kv");
-        print(STDERR "nothing to receive\n"), return if !keys %request;
-        print STDERR "Pending record load requests:\n\n";
-        my $n = 0;
-        my @tokens = sort keys %request;
-        printf(STDERR " #  %-10.10s  %-5.5s  %-16.16s  %-32.32s  %s\n",
-            'Date',
-            'Count',
-            'Project',
-            'Submitter',
-            'Description',
-        );
-        foreach my $token (@tokens) {
-            my $request = $request{$token};
-            my $submitter = $request->{'name'};
-            $submitter .= " <$request->{'email'}>" if $request->{'email'};
-            printf(STDERR "%2d. %s  %5d  %-16.16s  %-32.32s  %s\n",
-                ++$n,
-                strftime('%Y-%m-%d', localtime mtime($request->{'file'})),
-                $request->{'marccount'},
-                $request->{'project'} || '(no project)',
-                $submitter            || '(no submitter)',
-                $request->{'descrip'} || '(no description)',
-            );
-        }
-        while (1) {
-            print STDERR "\nChoose a request (q to cancel): ";
-            print STDERR '[1] ' if $n == 1;
-            my $choice = <STDIN>;
-            return if !defined $choice || $choice =~ /^[Qq]/;
-            $choice = 1 if !length($choice) && $n == 1;
-            $n = $choice, last
-                if $choice =~ /^[0-9]+$/
-                && $choice > 0
-                && $choice <= $n;
-        }
-        @ARGV = $tokens[$n-1];
-        my $p = $request{$ARGV[0]}{'project'};
-        while (!defined $p) {
-            print STDERR "Enter project code (q to cancel): ";
-            $p = <STDIN>;
-            return if !defined $p || $p =~ /^[Qq]/;
-            chomp $p;
-            if (-e "$root/$p/project.kv" || ($p =~ m{^/} && -e "$p/project.kv")) {
-                $pdir = $p;
-                undef $ucur;
-                undef $bcur;
-                orient();
-                print STDERR "Switched to project $p\n";
-                last;
-            }
-            else {
-                print STDERR "No such project: $p\n";
-                undef $p;
-            }
-        }
-    }
-    goto &cmd_receive;
-}
-
 # --- Other functions
 
 sub mkjob {
@@ -4977,12 +4906,6 @@ sub rdconfigfile {
         };
     }
     return \%conf;
-}
-
-sub sum {
-    my $n = 0;
-    $n += $_ for @_;
-    return $n;
 }
 
 # vim:set nu:
