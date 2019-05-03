@@ -1075,14 +1075,79 @@ sub cmd_archive {
         'n|dry-run' => sub { $verbose = $dry_run = 1 },
     ) or usage;
     my $total = 0;
-    foreach (unique(@ARGV)) {
-        my $count = count_update($_);
-        printf STDERR "%7d %s\n", $count, $_ if $verbose;
-        archive_update($_) if !$dry_run;
-        $total += $count;
+    my @updates = unique(@ARGV);
+    archive_updates(\@updates, {'verbose' => $verbose, 'dry_run' => $dry_run});
+}
+
+sub archive_updates {
+    my ($updates, $options) = @_;
+    my ($verbose, $dry_run) = @$options{qw(verbose dry_run)};
+    my (%ok, %failed, %skipped);
+    makedir('updates/archived');
+    my $total = 0;
+    my %count;
+    foreach my $u (@$updates) {
+        $skipped{$u} = "Too many preceding errors", next
+            if keys(%failed) > 1;
+        my $udir = "updates/$u";
+        $skipped{$u} = "No such update", next
+            if !-d $udir;
+        my $adir = "updates/archived/$u";
+        $skipped{$u} = "Unarchived update with the same name exists", next
+            if -e $adir;
+        my $ustat = rdstatus($udir);
+        $skipped{$u} = "Only finished updates may be archived", next
+            if $ustat ne FINISHED;
+        my $mtime = mtime("$udir/$ustat");
+        my @files = sort grep { !/^[.@]/ && $_ ne 'update.kv' } map { basename($_) } glob("$udir/*");
+        my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
+        my $n = count_update($u);
+        next if eval {
+            wrstatus($udir, ARCHIVING);
+            tar(-C => $udir, -czf => $tarball, @files)
+                or die "Can't create archive for update $u: $?\n";
+            # Move it and update its status
+            rename $udir, $adir or die;
+            wrstatus($adir, ARCHIVED);
+            aplast('archive', 'update' => $u);
+            # Remove files and restore mtime
+            rmrf(map { "$adir/$_" } @files)
+                or die "Can't remove files: $?\n";
+            utime $mtime, $mtime, $adir;
+            # Success!
+            $total += $n;
+            $count{$u} += $n;
+            $ok{$u} = 1;
+        };
+        # Failure... :-(
+        $failed{$u} = 1;
+        if (-e $adir) {
+            unlink $adir . '/' . ARCHIVING . '/archive.tar.gz';
+            rename $adir, $udir;
+        }
+        wrstatus($udir, ERROR);
     }
-    if ($verbose) {
-        printf STDERR @ARGV ? ("%7d total\n", $total) : ("Nothing to archive\n");
+    my @ok = keys %ok;
+    my @failed = keys %failed;
+    my @skipped = keys %skipped;
+    if (@ok) {
+        # Update updates.list
+        my @all_updates = rdlist('updates');
+        foreach my $u (@ok) {
+            s{^$u$}{archived/$u} for @all_updates;
+        }
+        wrlist('updates', @all_updates);
+        print STDERR "Archived: $total records in ", scalar(@ok), " updates\n"
+            if $verbose;
+    }
+    if (@failed) {
+        print STDERR "Failed: ", scalar(@failed), " updates:\n";
+        print $_, "\n" for @failed;
+        print STDERR "\n";
+    }
+    if (@skipped) {
+        print STDERR "Skipped: ", scalar(@skipped), " updates:\n";
+        print $_, "\n" for @skipped;
     }
 }
 
@@ -2947,28 +3012,7 @@ sub archive_project {
 }
 
 sub archive_update {
-    my ($u) = @_;
-    my $udir = "updates/$u";
-    fatal "No such update: $u" if ! -d $udir;
-    my $ustat = rdstatus($udir);
-    fatal "Only finished updates may be archived" if $ustat ne FINISHED;
-    my $mtime = mtime("$udir/$ustat");
-    wrstatus($udir, ARCHIVING);
-    my @files = sort grep { !/^[.@]/ && $_ ne 'update.kv' } map { basename($_) } glob("$udir/*");
-    my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
-    eval {
-        tar(-C => $udir, -czf => $tarball, @files)
-            or die "Can't create archive for update $u: $?\n";
-        rmrf(map { "$udir/$_" } @files)
-            or die "Can't remove files: $?\n";
-    } or do {
-        unlink ARCHIVING . '/archive.tar.gz';
-        wrstatus($udir, $ustat);
-        fatal $@;
-    };
-    wrstatus($udir, ARCHIVED);
-    aplast('archive', 'update' => $u);
-    utime $mtime, $mtime, $udir;
+    my ($u, $defer_list) = @_;
 }
 
 sub unarchive_project {
@@ -2976,25 +3020,41 @@ sub unarchive_project {
 }
 
 sub unarchive_update {
-    my ($u) = @_;
+    my ($u, $defer_list) = @_;
+    my $adir = "updates/archived/$u";
     my $udir = "updates/$u";
-    fatal "No such update: $u" if ! -d $udir;
-    my $ustat = rdstatus($udir);
+    if (!-e $adir) {
+        fatal "Update $u is not archived" if -e $udir;
+    }
+    elsif (-e $udir) {
+        fatal "Unarchived update is in the way" if -e $udir;
+    }
+    else {
+        fatal "No such update: $u";
+    }
+    my $ustat = rdstatus($adir);
     fatal "Only archived updates may be unarchived" if $ustat ne ARCHIVED;
-    my $mtime = mtime($udir);
-    wrstatus($udir, ARCHIVING);
-    my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
+    my $mtime = mtime($adir);
+    wrstatus($adir, ARCHIVING);
+    my $tarball = $adir . '/' . ARCHIVING . '/archive.tar.gz';
     eval {
-        tar(-C => $udir, -xzf => $tarball)
+        tar(-C => $adir, -xzf => $tarball)
             or die "Can't extract files from archive for update $u: $?\n";
         unlink $tarball
             or die "Can't remove $tarball: $!\n";
     } or do {
-        wrstatus($udir, ARCHIVED);
+        wrstatus($adir, ARCHIVED);
         fatal $@;
     };
-    utime $mtime, $mtime, $udir.'/'.ARCHIVED;
-    wrstatus($udir, FINISHED);
+    if (!$defer_list) {
+        # Rewrite updates.list
+        my @updates = rdlist('updates');
+        s{^$u$}{archived/$u} for @updates;
+        wrlist('updates', @updates);
+    }
+    wrstatus($adir, FINISHED);
+    rename $adir, $udir;
+    utime $mtime, $mtime, $udir;
     aplast('unarchive', 'update' => $u);
 }
 
