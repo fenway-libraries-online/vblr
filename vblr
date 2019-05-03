@@ -2966,9 +2966,9 @@ sub archive_update {
         wrstatus($udir, $ustat);
         fatal $@;
     };
-    utime $mtime, $mtime, $udir;
     wrstatus($udir, ARCHIVED);
     aplast('archive', 'update' => $u);
+    utime $mtime, $mtime, $udir;
 }
 
 sub unarchive_project {
