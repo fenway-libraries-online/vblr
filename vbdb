@@ -1,4 +1,117 @@
-#!/bin/zsh
+#!/usr/bin/perl
 
-print "vbdb doesn\'t do anything yet" >&2
-exit 2
+use strict;
+use warnings;
+
+use DBI;
+use Getopt::Long
+    qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
+
+sub usage;
+sub fatal;
+
+my $root = $ENV{'VBLR_ROOT'}
+    or fatal "VBLR_ROOT is not set";
+my $dbfile = 'vbdb.sqlite';
+my $dbh;
+
+chdir $root or fatal "chdir $root: $!";
+
+@ARGV = qw(status) if !@ARGV;
+
+&{ __PACKAGE__->can('cmd_'.shift(@ARGV)) or usage };
+
+sub cmd_status {
+    orient();
+    1;
+}
+
+# --- Other functions
+
+sub orient {
+    GetOptions(
+        @_;
+    ) or usage;
+    dbconnect($dbfile) if -e $dbfile;
+    logopen();
+}
+
+sub dbconnect {
+    my ($file) = @_;
+    $dbh = $self->{'dbh'} = (DBI->connect("dbi:SQLite:dbname=$file",'','') or die "connect failed");
+    $dbh->{'RaiseError'} = 1;
+    $dbh->do('pragma foreign_keys=on');
+}
+
+sub initdb {
+    foreach my $sql (split /;\n+/, q{
+        CREATE TABLE groups (
+            id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
+            code        VARCHAR UNIQUE NOT NULL, /* e.g., 'flo' */
+            name        VARCHAR NOT NULL,
+            shortname   VARCHAR,
+            domain      VARCHAR
+        );
+
+        CREATE TABLE projects (
+            id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
+            code        VARCHAR UNIQUE NOT NULL, /* e.g., 'upress' */
+            pcode       VARCHAR UNIQUE,          /* e.g., 'p4874b89dc' */
+            status      VARCHAR NOT NULL DEFAULT 'idle',
+            created     INTEGER NOT NULL,
+            description VARCHAR NOT NULL,
+            ongoing     INTEGER NOT NULL DEFAULT 1,
+            frequency   VARCHAR NOT NULL DEFAULT 'unknown',
+            group_id    INTEGER NOT NULL REFERENCES groups(id)
+        );
+
+        CREATE TABLE files (
+            id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
+            path        VARCHAR NOT NULL,
+            num_records INTEGER NOT NULL,
+            md5sum      VARCHAR NOT NULL,
+            purpose     VARCHAR NOT NULL DEFAULT 'add'
+        );
+
+        CREATE TABLE records (
+            id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
+            file_id     INTEGER NOT NULL REFERENCES files(id),
+            record_num  INTEGER NOT NULL,
+            oclc_num    INTEGER NULL
+        );
+
+        CREATE TABLE updates (
+            id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
+            code        VARCHAR NOT NULL,       /* e.g., '2018-03' */
+            status      VARCHAR NOT NULL DEFAULT 'new',
+            created     INTEGER NOT NULL,       /* seconds since UNIX epoch */
+            description VARCHAR NULL,
+            purpose     VARCHAR NOT NULL DEFAULT 'add',   /* add | delete | replace */
+            project_id  INTEGER NOT NULL REFERENCES projects(id),
+            file_id     INTEGER NOT NULL REFERENCES files(id)
+        );
+
+        CREATE TABLE jobs (
+            id          INTEGER UNIQUE NOT NULL PRIMARY KEY,
+            jcode       VARCHAR NOT NULL,
+            status      VARCHAR NOT NULL DEFAULT 'new',
+            created     INTEGER NOT NULL,  /* seconds since UNIX epoch */
+            first       INTEGER NOT NULL,  /* range within */
+            last        INTEGER NOT NULL,  /*  the update */
+            update_id   INTEGER NOT NULL REFERENCES updates(id)
+        );
+
+        CREATE TABLE load_results (
+            job_id      INTEGER NOT NULL REFERENCES jobs(id),
+            record_id   INTEGER NOT NULL REFERENCES records(id),
+            action      VARCHAR NULL,   /* A=added, R=replaced, D=deleted, M=matched, U=unresolved, etc. */
+            ils_num     INTEGER NULL
+        );
+    }) {
+        my $sth = $dbh->prepare($sql);
+        $sth->execute;
+    }
+}
+
+sub logopen {
+}
