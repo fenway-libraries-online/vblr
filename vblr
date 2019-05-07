@@ -760,6 +760,16 @@ sub cmd_onhold {
     run_hook('onhold');
 }
 
+sub cmd_waiting {
+    #@ waiting [-m COMMENT] :: set project status = waiting
+    my $comment;
+    GetOptions( 'm|comment=s' => \$comment ) or usage;
+    wrstatus('.', WAITING);
+    aplog('waiting', defined $comment ? ('comment' => $comment) : ());
+    aplast('waiting');
+    run_hook('waiting');
+}
+
 sub cmd_idle {
     #@ idle [-m COMMENT] :: set project status = idle
     my $comment;
