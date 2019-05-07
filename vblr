@@ -2642,7 +2642,7 @@ sub load_staged_batch {
 sub load_batch {
     my ($u, $b, %opt) = @_;
     my ($delete, $verbose, $dry_run, $autogen_loaded, $gen_html, $staged_job)
-        = @opt{qw(delete verbose dry_run autogen_loaded gen_html $staged_job)};
+        = @opt{qw(delete verbose dry_run autogen_loaded gen_html staged_job)};
     my ($s, $e);
     ($s, $e, $b) = batch_range($b, $u);
     my $n = $e - $s + 1;
@@ -2954,9 +2954,9 @@ sub archive_updates {
         $skipped{$u} = "Too many preceding errors", next
             if keys(%failed) > 1;
         my $udir = "updates/$u";
+        my $adir = "updates/archived/$u";
         $skipped{$u} = "No such update", next
             if !-d $udir;
-        my $adir = "updates/archived/$u";
         $skipped{$u} = "Unarchived update with the same name exists", next
             if -e $adir;
         my $ustat = rdstatus($udir);
