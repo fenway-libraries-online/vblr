@@ -316,7 +316,7 @@ sub cmd_base {
     GetOptions(
         'k|from-kits'     => \$opt{'kits'},
         'C|copy'          => \$opt{'copy'},
-        'E|empty'         => sub { $opt{'empty'} = $opt{'copy'} = 1 },
+        'E|empty'         => sub { $opt{'empty'} = $opt{'copy'} = $opt{'historical'} = 1 },
         'm|description=s' => \$opt{'description'},
         'i|historical'    => \$opt{'historical'},
         'u|purpose=s'     => sub {
