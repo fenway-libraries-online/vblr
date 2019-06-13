@@ -386,7 +386,7 @@ sub cmd_add {
         autoload($u, %opt) if $opt{'autoload'};
     }
     if ($opt{'quiet'}) {
-        ::exit -1 if !@updates;
+        ::exit 2 if !@updates;
     }
     else {
         print $_, "\n" for @updates;
@@ -5377,7 +5377,7 @@ sub compile_prompt {
 }
 
 sub exit {
-    CORE::exit(@_);
+    CORE::exit(@_ ? shift() : 0);
 }
 
 sub rdconfigfile {
