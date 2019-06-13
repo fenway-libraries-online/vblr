@@ -1712,9 +1712,19 @@ sub find_archived_update_marc {
 
 sub cmd_less {
     #@ less [UPDATE [BATCH]] :: show records in an update or batch
-    my ($u, $b) = infer_update_and_batch(INPROCESS, PREPARED, resolve_update_and_batch(@ARGV));
-    my ($start, @files) = find_marc($u, $b);
-    system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
+    my ($u, $b) = resolve_update_and_batch(@ARGV);
+    usage if !defined $u;
+    my $udir = "updates/$u";
+    my $err;
+    if (rdstatus($udir) eq ARCHIVED) {
+        fatal "Update $u is archived";
+    }
+    else {
+        my ($start, @files) = find_marc($u, $b);
+        fatal "No files to view" if !@files;
+        $err = system('marcless', '-f', '-h', '-n', '-N' => $start, @files);
+    }
+    ::exit $err;
 }
 
 sub cmd_find {
