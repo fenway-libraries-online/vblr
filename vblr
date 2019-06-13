@@ -5417,7 +5417,7 @@ sub tar {
 
 sub expand_env {
     local $_ = shift;
-    s{\$([A-Z0-9_]+)|\${([A-Z0-9_]+)}}{$ENV{$1 // $2} // ''}eg;
+    s{\$([A-Z0-9_]+)|\$\{([A-Z0-9_]+)\}}{$ENV{$1 // $2} // ''}eg;
     return $_;
 }
 
