@@ -1004,24 +1004,48 @@ sub cmd_projects {
 }
 
 sub cmd_updates {
-    #@ updates [-v] [UPDATE]... :: List updates
+    #@ updates [-l] [-A [+-]AGE] [-s [!]STATUS[,...]] [-p [!]PURPOSE[,...]] [UPDATE]... :: List updates
     my ($long, @filters, %ustat, %update);
     GetOptions(
         'l|long' => \$long,
         's|status=s', => sub {
-            my %want = map { '@'.$_ => 1 } split /,/, $_[1];
+            my (%wanted, %unwanted);
+            foreach (split /,/, $_[1]) {
+                if (s/^[!][@]?/\@/) {
+                    $unwanted{$_} = 1;
+                }
+                elsif (s/^[@]?/\@/) {
+                    $wanted{$_} = 1;
+                }
+            }
+            usage if %wanted && %unwanted;
             push @filters, sub {
                 my ($u) = @_;
                 my $ustat = $ustat{$u} ||= rdstatus("updates/$u");
-                return $u if $want{$ustat};
+                return if $unwanted{$ustat};
+                return $u if !%wanted || $wanted{$ustat};
             };
         },
         'p|u|purpose=s', => sub {
-            my %want = map { substr(lc $_, 0, 3) => 1 } split /,/, $_[1];
+            my (%wanted, %unwanted);
+            foreach (split /,/, $_[1]) {
+                if (/^[!][@]?(...)/) {
+                    $unwanted{'@' . lc $1} = 1;
+                }
+                elsif (/^[@]?(...)/) {
+                    $wanted{'@' . lc $1} = 1;
+                }
+                else {
+                    usage;
+                }
+            }
+            usage if %wanted && %unwanted;
             push @filters, sub {
                 my ($u) = @_;
                 my $update = $update{$u} ||= rdupdate($u);
-                return $u if $want{substr($update->{'purpose'} // 'unknown', 0, 3)};
+                my $upurp = substr($update->{'purpose'} // 'unknown', 0, 3);
+                return if $unwanted{$upurp};
+                return $u if !%wanted || $wanted{$upurp};
             };
         },
         'A|age=s' => sub {

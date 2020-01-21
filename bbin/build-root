@@ -15,4 +15,3 @@ esac
 mkdir -p $ROOT
 cp -n -R ./base/* $ROOT
 cp -n -R ./$ILS/* $ROOT
-pfr init $ROOT/vbdb.sqlite
