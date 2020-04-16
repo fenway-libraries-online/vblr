@@ -501,7 +501,7 @@ sub cmd_notes {
 sub cmd_conf {
     #@ conf :: Show configuration settings
     my ($verbose, $no_warnings);
-    my $confdir = 'conf';
+    my $confdir = $ENV{'VBLR_CONFDIR'} || 'conf';
     GetOptions(
         'd|conf-dir=s' => \$confdir,
         'v|verbose' => \$verbose,
