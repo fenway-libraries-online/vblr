@@ -1668,7 +1668,7 @@ sub cmd_match {
             chomp;
             my ($num, @matches) = split /\n/;
             if (@matches == 0) {
-                print "$num add\n";
+                print STDERR "$num add\n";
                 return;
             }
             my %match;
@@ -1677,13 +1677,13 @@ sub cmd_match {
                 push @{ $match{$result} ||= [] }, $id;
             }
             if (my $x = delete $match{'X'}) {
-                print join(' ', $num, 'dis', @$x), "\n";
+                print STDERR join(' ', $num, 'dis', @$x), "\n";
             }
             elsif (my $r = delete $match{'R'}) {
-                print join(' ', $num, 'mat', @$r), "\n";
+                print STDERR join(' ', $num, 'mat', @$r), "\n";
             }
             else {
-                print "$num add *\n";
+                print STDERR "$num add *\n";
             }
         }
     );
