@@ -1751,6 +1751,11 @@ sub cmd_less {
     ::exit $err;
 }
 
+sub cmd_diff {
+    #@ diff [UPDATE BATCH] :: show what the record prep script did
+    die "not yet implemented";
+}
+
 sub cmd_find {
     #@ find [-m|-c [TYPE]] [UPDATE [BATCH]] :: print the path to a file or directory in a project
     my ($absolute, $what, $name);
@@ -2991,9 +2996,10 @@ sub archive_updates {
     my ($updates, $options) = @_;
     my ($verbose, $dry_run) = @$options{qw(verbose dry_run)};
     my (%ok, %failed, %skipped);
-    makedir('updates/archived');
+    makedir('updates/archived') if !$dry_run;
     my $total = 0;
     my %count;
+    my $header = "Project $pcur:";
     foreach my $u (@$updates) {
         $skipped{$u} = "Too many preceding errors", next
             if keys(%failed) > 1;
@@ -3010,18 +3016,27 @@ sub archive_updates {
         my @files = sort grep { !/^[.@]/ && $_ ne 'update.kv' } map { basename($_) } glob("$udir/*");
         my $tarball = $udir . '/' . ARCHIVING . '/archive.tar.gz';
         my $n = count_update($u);
+        if ($verbose) {
+            if (defined $header) {
+                print STDERR $header, "\n";
+                undef $header;
+            }
+            printf STDERR "  archive %7d records : $u\n", $n;
+        }
         next if eval {
-            wrstatus($udir, ARCHIVING);
-            tar(-C => $udir, -czf => $tarball, @files)
-                or die "Can't create archive for update $u: $?\n";
-            # Move it and update its status
-            rename $udir, $adir or die;
-            wrstatus($adir, ARCHIVED);
-            aplast('archive', 'update' => $u);
-            # Remove files and restore mtime
-            rmrf(map { "$adir/$_" } @files)
-                or die "Can't remove files: $?\n";
-            utime $mtime, $mtime, $adir;
+            if (!$dry_run) {
+                wrstatus($udir, ARCHIVING);
+                tar(-C => $udir, -czf => $tarball, @files)
+                    or die "Can't create archive for update $u: $?\n";
+                # Move it and update its status
+                rename $udir, $adir or die;
+                wrstatus($adir, ARCHIVED);
+                aplast('archive', 'update' => $u);
+                # Remove files and restore mtime
+                rmrf(map { "$adir/$_" } @files)
+                    or die "Can't remove files: $?\n";
+                utime $mtime, $mtime, $adir;
+            }
             # Success!
             $total += $n;
             $count{$u} += $n;
@@ -3039,12 +3054,14 @@ sub archive_updates {
     my @failed = keys %failed;
     my @skipped = keys %skipped;
     if (@ok) {
-        # Update updates.list
-        my @all_updates = rdlist('updates');
-        foreach my $u (@ok) {
-            s{^$u$}{archived/$u} for @all_updates;
+        if (!$dry_run) {
+            # Update updates.list
+            my @all_updates = rdlist('updates');
+            foreach my $u (@ok) {
+                s{^$u$}{archived/$u} for @all_updates;
+            }
+            wrlist('updates', @all_updates);
         }
-        wrlist('updates', @all_updates);
         print STDERR "Archived: $total records in ", scalar(@ok), " updates\n"
             if $verbose;
     }
@@ -4176,7 +4193,8 @@ sub add {
         ! -d $udir        || fatal "Update $u has already been added";
         $u !~ /\s/        || fatal "Update names mustn't contain spaces";
         $u !~ m{/:}       || fatal "Update names mustn't contain / or :";
-        -d 'updates/BASE' || fatal "You must add the project base first";
+        -d 'updates/BASE' || -d 'updates/archived/BASE'
+                          || fatal "You must add the project base first";
     }
     makedir('updates', $udir);
     makedir("$udir/batches");
