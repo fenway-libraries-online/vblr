@@ -1,11 +1,15 @@
-include config.mk
+-include config.mk
 
 scripts = vblr vbdb $(ILS)/bin/*
 
-build: configure check root
+build: config.mk configure check root
 	@echo "Ready to install:"
 	@echo "* vblr will be installed in $(PREFIX)/bin"
 	@echo "* Data files will be installed in $(ROOT)"
+
+config.mk: config.mk.def
+	cp $< $@
+	@echo 'Edit config.mk to specify your ILS, etc.'
 
 clean:
 	rm -Rf build
